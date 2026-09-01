@@ -36,6 +36,9 @@ h1 { font-size: 1.45rem; margin: 0 0 4px; }
 h2 { font-size: 1.15rem; margin: 0 0 8px; }
 h3 { font-size: 1.05rem; margin: 0; }
 
+/* Заголовки не інтерактивні — рамка фокуса на них лише відволікає. */
+h1:focus, h2:focus, h3:focus { outline: none; }
+
 a { color: var(--primary); }
 
 #blazor-error-ui {
