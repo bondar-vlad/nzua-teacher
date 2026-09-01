@@ -94,6 +94,19 @@ window.nzuaAttachments = (() => {
                 pasteHandler = null;
             }
             zones.delete(zoneId);
+        },
+
+        // Гасимо перенос рядка для Enter, який надсилає; саме надсилання робить Blazor.
+        bindEnter: function (textareaId, sendOnEnter) {
+            const el = document.getElementById(textareaId);
+            if (!el) return;
+            el.dataset.sendOnEnter = sendOnEnter ? '1' : '0';
+            if (el.dataset.enterBound === '1') return;
+            el.dataset.enterBound = '1';
+            el.addEventListener('keydown', e => {
+                if (e.key !== 'Enter' || e.isComposing || e.shiftKey) return;
+                if (el.dataset.sendOnEnter === '1' || e.ctrlKey) e.preventDefault();
+            });
         }
     };
 })();

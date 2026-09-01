@@ -124,6 +124,17 @@
     }
 
     <div class="card">
+        <h2>💬 Чат</h2>
+        <div class="field">
+            <label>Як надсилати повідомлення</label>
+            <select @bind="_sendOnEnter" @bind:after="SaveSendOnEnter">
+                <option value="true">Enter — надіслати, Shift+Enter — новий рядок</option>
+                <option value="false">Ctrl+Enter — надіслати, Enter — новий рядок</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="card">
         <h2>🎤 Голосовий ввід</h2>
         <p class="subtitle">Перетворення сказаного на текст у чаті. Потрібен ключ Gemini (безоплатно) або OpenAI.</p>
         <div class="field">
@@ -178,6 +189,7 @@
     private string _customModelInput = "";
     private string _transcriptionProvider = "";
     private bool _showRealNames;
+    private string _sendOnEnter = "true";
     private bool _loggingIn;
     private bool _testing;
     private bool _clearCacheVisible;
@@ -192,6 +204,7 @@
 
         _transcriptionProvider = AiSettings.TranscriptionProvider.ToString();
         _showRealNames = AiSettings.ShowRealNamesInChat;
+        _sendOnEnter = AiSettings.SendOnEnter ? "true" : "false";
         _dbSize = GetDbSize();
     }
 
@@ -314,6 +327,13 @@
     {
         if (Enum.TryParse<AiProvider>(_transcriptionProvider, out var p))
             AiSettings.TranscriptionProvider = p;
+        return Task.CompletedTask;
+    }
+
+    private Task SaveSendOnEnter()
+    {
+        AiSettings.SendOnEnter = _sendOnEnter == "true";
+        Notify("Збережено. Зміна діятиме при наступному відкритті чату.", "ok");
         return Task.CompletedTask;
     }
 

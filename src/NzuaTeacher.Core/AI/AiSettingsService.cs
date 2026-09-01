@@ -109,6 +109,13 @@ public sealed class AiSettingsService(ISecretStore secrets, IAppPrefs prefs)
         set => prefs.Set("ai.transcription", value.ToString());
     }
 
+    /// <summary>true: Enter надсилає, Shift+Enter — новий рядок. false: надсилає лише Ctrl+Enter.</summary>
+    public bool SendOnEnter
+    {
+        get => prefs.GetBool("chat.sendOnEnter", true);
+        set => prefs.SetBool("chat.sendOnEnter", value);
+    }
+
     public async Task<AiProviderConfig?> GetActiveConfigAsync()
     {
         var provider = ActiveProvider;

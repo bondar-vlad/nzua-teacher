@@ -122,7 +122,7 @@
                 @onclick="ToggleRecording" disabled="@_busy">
             @(_recording ? "⏹" : "🎤")
         </button>
-        <textarea rows="1" placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати, Ctrl+V — вставити скрін)"
+        <textarea id="chat-input" rows="1" placeholder="@InputPlaceholder"
                   @bind="_input" @bind:event="oninput" @onkeydown="OnKeyDown" disabled="@_busy"></textarea>
         <button class="btn primary send-btn" @onclick="Send" disabled="@(_busy || string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0)">
             Надіслати ➤
@@ -162,6 +162,7 @@
     private string _selectedScenario = "";
     private string _scenarioJournalId = "";
     private Plugin.Maui.Audio.IAudioRecorder? _recorder;
+    private bool _sendOnEnter = true;
 
     private ToolCallRequest? _confirmRequest;
     private bool _confirmVisible;
@@ -173,6 +174,7 @@
     protected override async Task OnInitializedAsync()
     {
         _providerString = AiSettings.ActiveProvider.ToString();
+        _sendOnEnter = AiSettings.SendOnEnter;
         Chat.ConfirmationHandler = OnToolConfirmationNeeded;
         Chat.OnDelta = OnStreamDelta;
         _journals = await Store.GetJournalsAsync();
@@ -388,9 +390,14 @@
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter" && e.CtrlKey && !_busy)
+        if (e.Key != "Enter" || _busy || e.ShiftKey) return;
+        if (_sendOnEnter || e.CtrlKey)
             await Send();
     }
+
+    private string InputPlaceholder => _sendOnEnter
+        ? "Напишіть повідомлення… (Enter — надіслати, Shift+Enter — новий рядок)"
+        : "Напишіть повідомлення… (Ctrl+Enter — надіслати, Enter — новий рядок)";
 
     // Виклик приходить із фонового потоку function-invocation — маршалимо в UI.
     private async Task<bool> OnToolConfirmationNeeded(ToolCallRequest request)
@@ -428,6 +435,19 @@
         new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
 
     private string RenderMarkdown(string text) => Markdown.ToHtml(text ?? "", Pipeline);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            await JS.InvokeVoidAsync("nzuaAttachments.bindEnter", "chat-input", _sendOnEnter);
+        }
+        catch
+        {
+            // без цього Enter просто додасть новий рядок — не критично
+        }
+    }
 
     private async Task ScrollToBottom()
     {

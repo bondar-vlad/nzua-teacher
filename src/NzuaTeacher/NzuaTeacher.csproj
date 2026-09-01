@@ -31,6 +31,9 @@
         <!-- nzua-mcp — exe-проєкт: його apphost/deps/runtimeconfig дублюються між RID-вою
              і безRID-вою збіркою при publish; дублікати ідентичні — беремо перший. -->
         <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+
+        <!-- Власний Main у Platforms/Windows/Program.cs (обробка аргументу install-chromium). -->
+        <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
