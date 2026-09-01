@@ -132,7 +132,7 @@
 </DropZone>
 
 @* -------------------- підтвердження запису від AI -------------------- *@
-<Modal Visible="_confirmVisible" VisibleChanged="v => OnConfirmClosed(v)" Title="AI хоче записати в журнал" CloseOnBackdrop="false">
+<Modal Visible="_confirmVisible" VisibleChanged="v => OnConfirmClosed(v)" Title="Підтвердіть зміни в журналі" CloseOnBackdrop="false">
     <div class="tool-confirm">
         <div class="alert warn" style="margin-top:0">@_confirmRequest?.HumanSummary</div>
         <details>
@@ -215,7 +215,7 @@
         }
         catch (Exception ex)
         {
-            _error = $"Помилка: {ex.Message}";
+            _error = DescribeError(ex);
         }
         finally
         {
@@ -223,6 +223,22 @@
             _streamText.Clear();
             await ScrollToBottom();
         }
+    }
+
+    /// <summary>Розгортає лаконічні помилки провайдера (напр. 400 Bad Request) у читабельний текст.</summary>
+    private string DescribeError(Exception ex)
+    {
+        NzuaTeacher.Services.FileLoggerProvider.Write("Chat", "Помилка запиту до AI", ex);
+
+        var parts = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (!string.IsNullOrWhiteSpace(e.Message))
+                parts.Add(e.Message.Trim());
+
+        var text = string.Join(" ← ", parts.Distinct());
+        if (text.Contains("400", StringComparison.Ordinal))
+            text += $" • Перевірте назву моделі в Налаштуваннях (зараз: {AiSettings.GetModel(SelectedProvider)}) та чинність ключа.";
+        return $"Помилка: {text}";
     }
 
     private async Task RunScenario()
@@ -253,7 +269,7 @@
         }
         catch (Exception ex)
         {
-            _error = $"Помилка сценарію: {ex.Message}";
+            _error = $"Сценарій: {DescribeError(ex)}";
         }
         finally
         {

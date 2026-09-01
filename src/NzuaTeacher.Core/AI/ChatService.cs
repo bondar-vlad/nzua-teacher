@@ -11,33 +11,53 @@ public sealed record ToolCallRequest(string ToolName, string HumanSummary, strin
 public delegate Task<bool> ToolConfirmationHandler(ToolCallRequest request);
 
 /// <summary>
-/// Обгортка MCP-тула: перед викликом destructive-операції показує вчителю підтвердження.
-/// Відмова повертається моделі як результат тула, а не як помилка.
+/// Обгортка MCP-тула: прибирає зі схеми ключові слова, яких не розуміють деякі провайдери,
+/// і перед записом у журнал питає підтвердження вчителя.
 /// </summary>
-public sealed class ConfirmGatedTool : DelegatingAIFunction
+public sealed class PreparedTool : DelegatingAIFunction
 {
-    private readonly ToolConfirmationHandler _confirm;
+    private readonly ToolConfirmationHandler? _confirm;
+    private readonly JsonElement _schema;
 
-    public ConfirmGatedTool(AIFunction inner, ToolConfirmationHandler confirm) : base(inner)
+    public PreparedTool(AIFunction inner, ToolConfirmationHandler? confirm) : base(inner)
     {
         _confirm = confirm;
+        _schema = ToolSchemaSanitizer.Sanitize(inner.JsonSchema);
     }
+
+    public override JsonElement JsonSchema => _schema;
 
     protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
-        var argsJson = JsonSerializer.Serialize(
-            arguments.ToDictionary(kv => kv.Key, kv => kv.Value),
-            new JsonSerializerOptions { WriteIndented = true });
+        if (_confirm is not null)
+        {
+            var argsJson = JsonSerializer.Serialize(
+                arguments.ToDictionary(kv => kv.Key, kv => kv.Value),
+                new JsonSerializerOptions { WriteIndented = true });
 
-        var approved = await _confirm(new ToolCallRequest(Name, ToolCallSummarizer.Summarize(Name, arguments), argsJson));
-        if (!approved)
-            return "⛔ Вчитель відхилив цю операцію. Не повторюй її без нового явного прохання користувача.";
+            var approved = await _confirm(new ToolCallRequest(Name, ToolCallSummarizer.Summarize(Name, arguments), argsJson));
+            if (!approved)
+                return "⛔ Вчитель відхилив цю операцію. Не повторюй її без нового явного прохання користувача.";
+        }
 
         return await base.InvokeCoreAsync(arguments, cancellationToken);
     }
 
-    public static bool RequiresConfirmation(McpClientTool tool) =>
-        tool.ProtocolTool.Annotations?.ReadOnlyHint != true;
+    /// <summary>Інструменти, що справді змінюють журнал (лише вони вимагають підтвердження).</summary>
+    private static readonly HashSet<string> JournalWriteTools =
+    [
+        "nzua_set_marks",
+        "nzua_add_lessons",
+        "nzua_edit_lessons",
+        "nzua_delete_lessons",
+        "nzua_set_homework",
+    ];
+
+    public static bool RequiresConfirmation(McpClientTool tool)
+    {
+        if (tool.ProtocolTool.Annotations?.ReadOnlyHint == true) return false;
+        return JournalWriteTools.Contains(tool.Name) || tool.ProtocolTool.Annotations?.DestructiveHint == true;
+    }
 }
 
 /// <summary>Людський опис виклику тула українською для діалогу підтвердження.</summary>
@@ -222,10 +242,8 @@ public sealed class ChatService(McpChatHost mcpHost, LocalChatTools localTools)
             var mcpTools = await mcpHost.ListToolsAsync(ct);
             foreach (var tool in mcpTools)
             {
-                if (ConfirmGatedTool.RequiresConfirmation(tool) && ConfirmationHandler is not null)
-                    tools.Add(new ConfirmGatedTool(tool, ConfirmationHandler));
-                else
-                    tools.Add(tool);
+                var needsConfirm = PreparedTool.RequiresConfirmation(tool) && ConfirmationHandler is not null;
+                tools.Add(new PreparedTool(tool, needsConfirm ? ConfirmationHandler : null));
             }
         }
         catch

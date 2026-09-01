@@ -32,6 +32,12 @@ html, body {
     height: 100vh; color: var(--muted); font-size: 1.1rem;
 }
 
+/* Рамка фокуса — лише для клавіатурної навігації, не після кліку. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+summary { list-style-position: outside; }
+summary:focus, details:focus { outline: none; }
+
 h1 { font-size: 1.45rem; margin: 0 0 4px; }
 h2 { font-size: 1.15rem; margin: 0 0 8px; }
 h3 { font-size: 1.05rem; margin: 0; }
