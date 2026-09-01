@@ -298,6 +298,25 @@ table.topics-table { width: 100%; border-collapse: collapse; font-size: .9rem; b
 .recording { color: var(--danger); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
 
+/* ======================== вкладення: Ctrl+V і drag&drop ================== */
+.drop-zone { position: relative; }
+.drop-zone.drag-over::after {
+    content: "Відпустіть файли, щоб додати їх";
+    position: absolute; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; font-weight: 600; color: var(--primary);
+    background: rgba(231, 237, 253, .92);
+    border: 2px dashed var(--primary); border-radius: var(--radius);
+    pointer-events: none;
+}
+
+.drop-hint { text-align: center; color: var(--muted); font-size: .78rem; padding: 6px 0 2px; }
+
+.materials-box {
+    border: 1px dashed var(--border); border-radius: 10px;
+    padding: 10px 12px; background: #f8fafc;
+}
+
 .tool-confirm pre {
     background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;
     padding: 10px; font-size: .78rem; max-height: 220px; overflow: auto;

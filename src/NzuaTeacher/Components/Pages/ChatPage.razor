@@ -12,7 +12,7 @@
 @inject IJSRuntime JS
 @implements IDisposable
 
-<div class="chat-layout">
+<DropZone CssClass="chat-layout drop-zone" OnFiles="OnFilesFromBrowser">
     <div class="page-header" style="margin-bottom:8px">
         <div>
             <h1>AI-помічник</h1>
@@ -108,7 +108,7 @@
         <div class="attachment-list">
             @foreach (var att in _attachments)
             {
-                <span class="chip">📎 @att.FileName <button class="btn-icon" @onclick="() => _attachments.Remove(att)">✕</button></span>
+                <span class="chip">@AttachmentIcon(att.MediaType) @att.FileName <button class="btn-icon" @onclick="() => _attachments.Remove(att)">✕</button></span>
             }
         </div>
     }
@@ -122,13 +122,14 @@
                 @onclick="ToggleRecording" disabled="@_busy">
             @(_recording ? "⏹" : "🎤")
         </button>
-        <textarea rows="1" placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати)"
+        <textarea rows="1" placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати, Ctrl+V — вставити скрін)"
                   @bind="_input" @bind:event="oninput" @onkeydown="OnKeyDown" disabled="@_busy"></textarea>
         <button class="btn primary send-btn" @onclick="Send" disabled="@(_busy || string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0)">
             Надіслати ➤
         </button>
     </div>
-</div>
+    <div class="drop-hint">💡 Вставте скріншот через Ctrl+V або перетягніть файли у вікно</div>
+</DropZone>
 
 @* -------------------- підтвердження запису від AI -------------------- *@
 <Modal Visible="_confirmVisible" VisibleChanged="v => OnConfirmClosed(v)" Title="AI хоче записати в журнал" CloseOnBackdrop="false">
@@ -296,6 +297,27 @@
         ".md" => "text/markdown",
         _ => "text/plain",
     };
+
+    internal static string AttachmentIcon(string mediaType) =>
+        mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "🖼"
+        : mediaType.Contains("pdf", StringComparison.OrdinalIgnoreCase) ? "📄"
+        : "📎";
+
+    /// <summary>Файли, вставлені через Ctrl+V або перетягнуті у вікно.</summary>
+    private void OnFilesFromBrowser(IReadOnlyList<BrowserFile> files)
+    {
+        foreach (var file in files)
+        {
+            if (file.TooLarge)
+            {
+                _error = $"«{file.Name}» завеликий (понад 15 МБ).";
+                continue;
+            }
+            var mediaType = string.IsNullOrEmpty(file.MediaType) ? GuessMime(file.Name) : file.MediaType;
+            _attachments.Add(new ChatAttachment(Convert.FromBase64String(file.Base64), mediaType, file.Name));
+        }
+        StateHasChanged();
+    }
 
     private async Task ToggleRecording()
     {

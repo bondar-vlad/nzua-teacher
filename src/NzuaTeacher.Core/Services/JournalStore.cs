@@ -14,17 +14,28 @@ public sealed class JournalStore(IDbContextFactory<TeacherDbContext> dbFactory)
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
-    public async Task<List<CachedJournal>> GetJournalsAsync()
+    public async Task<List<CachedJournal>> GetJournalsAsync(string? semesterId = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        return await db.Journals.AsNoTracking()
+        var query = db.Journals.AsNoTracking();
+        if (!string.IsNullOrEmpty(semesterId))
+            query = query.Where(j => j.SemesterId == semesterId);
+        return await query
             .OrderBy(j => j.ClassName).ThenBy(j => j.Subject)
             .ToListAsync();
     }
 
-    public async Task ApplyJournalListAsync(JournalListData data)
+    /// <param name="requestedSemesterId">Семестр, який запросив користувач (fallback, якщо сторінка не позначила вибрану опцію).</param>
+    public async Task ApplyJournalListAsync(JournalListData data, string? requestedSemesterId = null)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
+
+        // NZ.UA повертає CurrentSemester як підпис («I семестр…»), а не ID — беремо ID із позначеної опції.
+        var semesterId = data.Semesters.FirstOrDefault(s => s.IsCurrent)?.SemesterId
+            ?? requestedSemesterId
+            ?? data.Semesters.FirstOrDefault()?.SemesterId
+            ?? "";
+
         var existing = await db.Journals.ToDictionaryAsync(j => j.JournalId);
         var incoming = new HashSet<string>();
 
@@ -35,7 +46,7 @@ public sealed class JournalStore(IDbContextFactory<TeacherDbContext> dbFactory)
             {
                 row.Subject = item.Subject;
                 row.ClassName = item.ClassName;
-                row.SemesterId = data.CurrentSemester;
+                row.SemesterId = semesterId;
             }
             else
             {
@@ -44,26 +55,53 @@ public sealed class JournalStore(IDbContextFactory<TeacherDbContext> dbFactory)
                     JournalId = item.JournalId,
                     Subject = item.Subject,
                     ClassName = item.ClassName,
-                    SemesterId = data.CurrentSemester,
+                    SemesterId = semesterId,
                 });
             }
         }
 
-        // Журнали, що зникли зі списку (інший семестр), лишаємо в кеші — вони можуть мати pending-операції.
+        // Прибираємо журнали цього семестру, яких уже немає на сервері, і записи з невідомим
+        // семестром (застарілі). Журнали з ненадісланими змінами лишаємо недоторканими.
+        var knownSemesters = data.Semesters.Select(s => s.SemesterId).ToHashSet();
+        var pendingJournalIds = await db.PendingOps
+            .Where(p => p.Status != PendingOpStatus.Synced)
+            .Select(p => p.JournalId).Distinct().ToListAsync();
+
+        var stale = existing.Values
+            .Where(j => !incoming.Contains(j.JournalId)
+                        && !pendingJournalIds.Contains(j.JournalId)
+                        && (j.SemesterId == semesterId || !knownSemesters.Contains(j.SemesterId ?? "")))
+            .ToList();
+
+        foreach (var journal in stale)
+            await RemoveJournalDataAsync(db, journal);
+
         await SetSettingAsync(db, "semesters", JsonSerializer.Serialize(data.Semesters, Json));
-        await SetSettingAsync(db, "currentSemester", data.CurrentSemester);
+        await SetSettingAsync(db, "currentSemesterId", semesterId);
         await db.SaveChangesAsync();
     }
 
-    public async Task<(List<SemesterInfo> Semesters, string? Current)> GetSemestersAsync()
+    private static async Task RemoveJournalDataAsync(TeacherDbContext db, CachedJournal journal)
+    {
+        var id = journal.JournalId;
+        db.Students.RemoveRange(await db.Students.Where(s => s.JournalId == id).ToListAsync());
+        db.Lessons.RemoveRange(await db.Lessons.Where(l => l.JournalId == id).ToListAsync());
+        db.Marks.RemoveRange(await db.Marks.Where(m => m.JournalId == id).ToListAsync());
+        db.Homework.RemoveRange(await db.Homework.Where(h => h.JournalId == id).ToListAsync());
+        var form = await db.LessonForms.FindAsync(id);
+        if (form is not null) db.LessonForms.Remove(form);
+        db.Journals.Remove(journal);
+    }
+
+    public async Task<(List<SemesterInfo> Semesters, string? CurrentId)> GetSemestersAsync()
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         var semJson = await GetSettingAsync(db, "semesters");
-        var current = await GetSettingAsync(db, "currentSemester");
+        var currentId = await GetSettingAsync(db, "currentSemesterId");
         var semesters = semJson is null
             ? []
             : JsonSerializer.Deserialize<List<SemesterInfo>>(semJson) ?? [];
-        return (semesters, current);
+        return (semesters, currentId);
     }
 
     public async Task<JournalGrid?> GetGridAsync(string journalId)

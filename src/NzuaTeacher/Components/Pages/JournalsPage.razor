@@ -26,7 +26,7 @@
             </select>
         </label>
     }
-    <button class="btn primary" @onclick="() => RefreshList(null)" disabled="@_busy">
+    <button class="btn primary" @onclick="() => RefreshList(_selectedSemester)" disabled="@_busy">
         @if (_busy)
         {
             <span class="spinner"></span>
@@ -56,7 +56,16 @@
 {
     <div class="empty-state">
         <div class="icon">📓</div>
-        <div>Журналів поки немає. Натисніть «Оновити з NZ.UA», щоб завантажити ваші журнали.</div>
+        <div>
+            @if (_semesters.Count > 0)
+            {
+                <text>У семестрі «@CurrentSemesterLabel» журналів немає. Натисніть «Оновити з NZ.UA», щоб завантажити їх.</text>
+            }
+            else
+            {
+                <text>Журналів поки немає. Натисніть «Оновити з NZ.UA», щоб завантажити ваші журнали.</text>
+            }
+        </div>
     </div>
 }
 else
@@ -94,21 +103,27 @@ else
 
     protected override async Task OnInitializedAsync() => await LoadFromStore();
 
+    private string CurrentSemesterLabel =>
+        _semesters.FirstOrDefault(s => s.SemesterId == _selectedSemester)?.Label ?? "—";
+
     private async Task LoadFromStore()
     {
-        _journals = await Store.GetJournalsAsync();
-        var (semesters, current) = await Store.GetSemestersAsync();
+        var (semesters, currentId) = await Store.GetSemestersAsync();
         _semesters = semesters;
-        // Якщо збережений семестр не знайдено серед опцій — падаємо на поточний/перший.
         _selectedSemester =
-            semesters.FirstOrDefault(s => s.SemesterId == current)?.SemesterId
+            semesters.FirstOrDefault(s => s.SemesterId == currentId)?.SemesterId
             ?? semesters.FirstOrDefault(s => s.IsCurrent)?.SemesterId
             ?? semesters.FirstOrDefault()?.SemesterId;
+
+        // Показуємо виключно журнали вибраного семестру.
+        _journals = await Store.GetJournalsAsync(_selectedSemester);
     }
 
     private async Task OnSemesterChanged()
     {
         if (string.IsNullOrEmpty(_selectedSemester)) return;
+        // Спочатку показуємо те, що вже збережене для цього семестру, потім тягнемо свіже.
+        _journals = await Store.GetJournalsAsync(_selectedSemester);
         await RefreshList(_selectedSemester);
     }
 

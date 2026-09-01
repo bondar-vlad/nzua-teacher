@@ -31,7 +31,7 @@ public sealed class SyncService(
         var list = semesterId is null
             ? await journalApi.GetJournalList()
             : await journalApi.ChangeSemester(semesterId);
-        await journalStore.ApplyJournalListAsync(list);
+        await journalStore.ApplyJournalListAsync(list, semesterId);
         Report("Список журналів оновлено.");
     }
 

@@ -1,0 +1,38 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div id="@_elementId" class="@CssClass">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string CssClass { get; set; } = "drop-zone";
+    [Parameter] public EventCallback<IReadOnlyList<BrowserFile>> OnFiles { get; set; }
+
+    private readonly string _elementId = $"dz-{Guid.NewGuid():N}";
+    private DotNetObjectReference<DropZone>? _ref;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _ref = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("nzuaAttachments.register", _elementId, _ref);
+    }
+
+    [JSInvokable]
+    public Task OnFilesFromBrowser(BrowserFile[] files) => OnFiles.InvokeAsync(files);
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("nzuaAttachments.unregister", _elementId);
+        }
+        catch (JSDisconnectedException)
+        {
+            // сторінку вже закрито
+        }
+        _ref?.Dispose();
+    }
+}

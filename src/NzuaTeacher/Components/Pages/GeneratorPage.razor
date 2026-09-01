@@ -6,6 +6,7 @@
 @inject AiSettingsService AiSettings
 @inject Microsoft.EntityFrameworkCore.IDbContextFactory<TeacherDbContext> DbFactory
 
+<DropZone CssClass="drop-zone" OnFiles="OnFilesFromBrowser">
 <div class="page-header">
     <div>
         <h1>Генератор робіт</h1>
@@ -76,8 +77,29 @@
     </div>
 
     <div class="field">
-        <label>Додаткові побажання (необовʼязково)</label>
-        <textarea rows="2" @bind="_extra" placeholder="Наприклад: додай одну задачу на логіку, уникай тестових питань…"></textarea>
+        <label>Матеріали-зразки (необовʼязково)</label>
+        <div class="materials-box">
+            <div class="subtitle">
+                📸 Вставте скріншот сторінки підручника через <b>Ctrl+V</b>, перетягніть файли сюди
+                або оберіть вручну — AI складе завдання такого самого типу.
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap">
+                <label class="btn small">
+                    📎 Обрати файли
+                    <InputFile OnChange="OnFilesSelected" multiple accept="image/*,.pdf,.txt,.csv,.md" style="display:none" />
+                </label>
+                @foreach (var m in _materials)
+                {
+                    <span class="chip">@Icon(m.MediaType) @m.FileName <button class="btn-icon" @onclick="() => _materials.Remove(m)">✕</button></span>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="field">
+        <label>Що зробити на основі цих матеріалів / додаткові побажання</label>
+        <textarea rows="3" @bind="_extra"
+                  placeholder="Наприклад: візьми завдання №7–9 зі скріна й зроби аналогічні з іншими числами; додай одну задачу на логіку…"></textarea>
     </div>
 
     @if (_analytics is not null && _differentiate)
@@ -138,10 +160,12 @@
         }
     </div>
 }
+</DropZone>
 
 @code {
     private sealed record LessonOption(string ScheduleId, string Date, string Topic);
 
+    private readonly List<ChatAttachment> _materials = [];
     private List<CachedJournal> _journals = [];
     private List<LessonOption> _lessons = [];
     private readonly HashSet<string> _selectedSchedules = [];
@@ -209,7 +233,7 @@
             var spec = new AssignmentSpec(_journalId, _selectedSchedules.ToList(), _workType, _differentiate, _variants,
                 string.IsNullOrWhiteSpace(_extra) ? null : _extra.Trim());
             var client = ChatClientFactory.Create(config, withFunctionInvocation: false);
-            _doc = await Generator.GenerateAsync(client, spec, _analytics);
+            _doc = await Generator.GenerateAsync(client, spec, _analytics, _materials);
         }
         catch (Exception ex)
         {
@@ -220,6 +244,54 @@
             _busy = false;
         }
     }
+
+    /// <summary>Файли, вставлені через Ctrl+V або перетягнуті у вікно.</summary>
+    private void OnFilesFromBrowser(IReadOnlyList<BrowserFile> files)
+    {
+        foreach (var file in files)
+        {
+            if (file.TooLarge)
+            {
+                _error = $"«{file.Name}» завеликий (понад 15 МБ).";
+                continue;
+            }
+            var mediaType = string.IsNullOrEmpty(file.MediaType) ? GuessMime(file.Name) : file.MediaType;
+            _materials.Add(new ChatAttachment(Convert.FromBase64String(file.Base64), mediaType, file.Name));
+        }
+        StateHasChanged();
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(8))
+        {
+            if (file.Size > 15 * 1024 * 1024)
+            {
+                _error = $"«{file.Name}» завеликий (понад 15 МБ).";
+                continue;
+            }
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(15 * 1024 * 1024).CopyToAsync(ms);
+            var mediaType = string.IsNullOrEmpty(file.ContentType) ? GuessMime(file.Name) : file.ContentType;
+            _materials.Add(new ChatAttachment(ms.ToArray(), mediaType, file.Name));
+        }
+    }
+
+    private static string GuessMime(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
+        ".pdf" => "application/pdf",
+        ".csv" => "text/csv",
+        ".md" => "text/markdown",
+        _ => "text/plain",
+    };
+
+    private static string Icon(string mediaType) =>
+        mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "🖼"
+        : mediaType.Contains("pdf", StringComparison.OrdinalIgnoreCase) ? "📄"
+        : "📎";
 
     private async Task SaveAndOpen(bool printable)
     {

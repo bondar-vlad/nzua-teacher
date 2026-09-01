@@ -151,7 +151,11 @@ public sealed class AssignmentGenerator(IDbContextFactory<TeacherDbContext> dbFa
     }
 
     public async Task<AssignmentDoc> GenerateAsync(
-        IChatClient chatClient, AssignmentSpec spec, ClassAnalytics analytics, CancellationToken ct = default)
+        IChatClient chatClient,
+        AssignmentSpec spec,
+        ClassAnalytics analytics,
+        IReadOnlyList<ChatAttachment>? materials = null,
+        CancellationToken ct = default)
     {
         var groups = spec.Differentiate
             ? analytics.Students.GroupBy(s => s.Group).OrderBy(g => g.Key)
@@ -179,17 +183,36 @@ public sealed class AssignmentGenerator(IDbContextFactory<TeacherDbContext> dbFa
         var systemPrompt =
             "Ти — досвідчений український методист НУШ. Створюєш диференційовані роботи для учнів " +
             "за 12-бальною шкалою оцінювання (наказ МОН №1427). Завдання формулюй українською, чітко, відповідно до вікових норм. " +
-            "Поверни СТРОГО один JSON-обʼєкт без markdown-огорток за схемою: " +
+            "Якщо вчитель додав матеріали (скріншоти сторінок підручника, PDF, текст) — бери їх за основу: " +
+            "тримайся того самого типу, стилю й рівня складності завдань, але змінюй числа/умови, щоб варіанти відрізнялись. " +
+            "Поверни СТРОГО один JSON-об'єкт без markdown-огорток за схемою: " +
             """{"title":str,"subject":str,"className":str,"workType":str,"durationMinutes":int,"groups":[{"name":str,"levelNote":str,"studentPseudonyms":[str],"variants":[{"label":str,"tasks":[{"number":int,"text":str,"points":num,"answer":str}]}]}],"evaluationCriteria":str}""" +
             " Сума балів варіанта — 12. Для слабших груп — простіші завдання з опорою, для сильніших — творчі та проблемні. " +
             "answer — стислий правильний розвʼязок/відповідь для вчителя.";
 
+        var userContent = new List<AIContent>
+        {
+            new TextContent(
+                $"Дані класу (JSON):\n{JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping })}\n\n" +
+                $"Склади {spec.WorkType} роботу з урахуванням слабких тем і рівнів груп."),
+        };
+
+        if (materials is { Count: > 0 })
+        {
+            userContent.Add(new TextContent($"Додано матеріалів від вчителя: {materials.Count}. Використай їх як основу для завдань."));
+            foreach (var material in materials)
+            {
+                if (material.MediaType.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
+                    userContent.Add(new TextContent($"Матеріал «{material.FileName}»:\n{System.Text.Encoding.UTF8.GetString(material.Data)}"));
+                else
+                    userContent.Add(new DataContent(material.Data, material.MediaType));
+            }
+        }
+
         List<ChatMessage> messages =
         [
             new(ChatRole.System, systemPrompt),
-            new(ChatRole.User,
-                $"Дані класу (JSON):\n{JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping })}\n\n" +
-                $"Склади {spec.WorkType} роботу з урахуванням слабких тем і рівнів груп."),
+            new(ChatRole.User, userContent),
         ];
 
         var response = await chatClient.GetResponseAsync(messages, new ChatOptions { MaxOutputTokens = 8192 }, ct);
