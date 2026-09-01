@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@using NzuaTeacher.Services
 @inject NzuaSessionService Session
 @inject OutboxService Outbox
 @implements IDisposable
@@ -40,12 +41,30 @@
     </aside>
 
     <main class="content">
-        @Body
+        <ErrorBoundary @ref="_errorBoundary" @key="_boundaryKey">
+            <ChildContent>@Body</ChildContent>
+            <ErrorContent Context="exception">
+                <div class="card" style="max-width:760px">
+                    <h2>⚠️ Сталася помилка на цій сторінці</h2>
+                    <div class="alert error" style="margin-top:10px">@exception.Message</div>
+                    <details>
+                        <summary class="subtitle" style="cursor:pointer">Технічні подробиці (для звіту про помилку)</summary>
+                        <pre style="white-space:pre-wrap; font-size:.75rem; max-height:260px; overflow:auto">@exception</pre>
+                    </details>
+                    <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap">
+                        <button class="btn primary" @onclick="Recover">↺ Спробувати ще раз</button>
+                        <button class="btn" @onclick="OpenLogFolder">📁 Відкрити журнал помилок</button>
+                    </div>
+                </div>
+            </ErrorContent>
+        </ErrorBoundary>
     </main>
 </div>
 
 @code {
     private int _pendingCount;
+    private ErrorBoundary? _errorBoundary;
+    private int _boundaryKey;
 
     protected override async Task OnInitializedAsync()
     {
@@ -54,10 +73,36 @@
         _pendingCount = await Outbox.GetPendingCountAsync();
     }
 
+    private void Recover()
+    {
+        // Новий @key перестворює межу разом із дочірньою сторінкою.
+        _boundaryKey++;
+        _errorBoundary?.Recover();
+    }
+
+    private async Task OpenLogFolder()
+    {
+        try
+        {
+            await Launcher.Default.OpenAsync(new Uri("file:///" + FileLoggerProvider.LogDirectory.Replace('\\', '/')));
+        }
+        catch
+        {
+            // якщо не вдалося — шлях все одно видно в подробицях
+        }
+    }
+
     private async void OnChanged()
     {
-        _pendingCount = await Outbox.GetPendingCountAsync();
-        await InvokeAsync(StateHasChanged);
+        try
+        {
+            _pendingCount = await Outbox.GetPendingCountAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            FileLoggerProvider.Write("MainLayout", "Не вдалося оновити лічильник змін", ex);
+        }
     }
 
     public void Dispose()

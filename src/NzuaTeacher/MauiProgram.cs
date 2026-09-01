@@ -27,6 +27,15 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
+        builder.Logging.AddProvider(new FileLoggerProvider());
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            FileLoggerProvider.Write("UnhandledException", "Необроблена помилка", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            FileLoggerProvider.Write("UnobservedTaskException", "Помилка у фоновій задачі", e.Exception);
+            e.SetObserved();
+        };
+
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
         builder.Logging.AddDebug();

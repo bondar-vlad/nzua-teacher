@@ -169,8 +169,11 @@
 </Modal>
 
 @code {
-    private readonly Dictionary<AiProvider, string> _keyInputs = [];
-    private readonly Dictionary<AiProvider, bool> _hasKey = [];
+    // Заповнюємо одразу: перший рендер відбувається до завершення OnInitializedAsync.
+    private readonly Dictionary<AiProvider, string> _keyInputs =
+        Enum.GetValues<AiProvider>().ToDictionary(p => p, _ => "");
+    private readonly Dictionary<AiProvider, bool> _hasKey =
+        Enum.GetValues<AiProvider>().ToDictionary(p => p, _ => false);
     private AiProvider? _customModelFor;
     private string _customModelInput = "";
     private string _transcriptionProvider = "";
@@ -185,10 +188,8 @@
     protected override async Task OnInitializedAsync()
     {
         foreach (var p in Enum.GetValues<AiProvider>())
-        {
-            _keyInputs[p] = "";
             _hasKey[p] = !string.IsNullOrEmpty(await AiSettings.GetApiKeyAsync(p));
-        }
+
         _transcriptionProvider = AiSettings.TranscriptionProvider.ToString();
         _showRealNames = AiSettings.ShowRealNamesInChat;
         _dbSize = GetDbSize();

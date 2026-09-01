@@ -1,4 +1,5 @@
 @implements IAsyncDisposable
+@using NzuaTeacher.Services
 @inject IJSRuntime JS
 
 <div id="@_elementId" class="@CssClass">
@@ -16,8 +17,16 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        _ref = DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("nzuaAttachments.register", _elementId, _ref);
+        try
+        {
+            _ref = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("nzuaAttachments.register", _elementId, _ref);
+        }
+        catch (Exception ex)
+        {
+            // Без вставки/перетягування сторінка має працювати далі — кнопка вибору файлів лишається.
+            FileLoggerProvider.Write("DropZone", "Не вдалося увімкнути вставку/перетягування файлів", ex);
+        }
     }
 
     [JSInvokable]
@@ -29,9 +38,9 @@
         {
             await JS.InvokeVoidAsync("nzuaAttachments.unregister", _elementId);
         }
-        catch (JSDisconnectedException)
+        catch
         {
-            // сторінку вже закрито
+            // сторінку вже закрито або скрипт недоступний
         }
         _ref?.Dispose();
     }

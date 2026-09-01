@@ -189,28 +189,46 @@
         _selectedSchedules.Clear();
         _analytics = null;
         _doc = null;
+        _error = null;
         if (string.IsNullOrEmpty(_journalId)) return;
 
-        var grid = await Store.GetGridAsync(_journalId);
-        if (grid is null) return;
-        _lessons = grid.Lessons
-            .Select(l =>
+        try
+        {
+            var grid = await Store.GetGridAsync(_journalId);
+            if (grid is null)
             {
-                grid.HomeworkBySchedule.TryGetValue(l.ScheduleId, out var hw);
-                return new LessonOption(l.ScheduleId, $"{l.Day:00}.{l.Month}", hw?.Topic ?? "");
-            })
-            .Where(o => !string.IsNullOrWhiteSpace(o.Topic))
-            .ToList();
+                _error = "Цей журнал ще не завантажений. Відкрийте його й натисніть «Оновити з NZ.UA».";
+                return;
+            }
+            _lessons = grid.Lessons
+                .Select(l =>
+                {
+                    grid.HomeworkBySchedule.TryGetValue(l.ScheduleId, out var hw);
+                    return new LessonOption(l.ScheduleId, $"{l.Day:00}.{l.Month}", hw?.Topic ?? "");
+                })
+                .Where(o => !string.IsNullOrWhiteSpace(o.Topic))
+                .ToList();
 
-        _analytics = await Generator.BuildAnalyticsAsync(_journalId, []);
+            _analytics = await Generator.BuildAnalyticsAsync(_journalId, []);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
     }
 
-    private async void ToggleLesson(string scheduleId, bool on)
+    private async Task ToggleLesson(string scheduleId, bool on)
     {
         if (on) _selectedSchedules.Add(scheduleId);
         else _selectedSchedules.Remove(scheduleId);
-        _analytics = await Generator.BuildAnalyticsAsync(_journalId, _selectedSchedules);
-        await InvokeAsync(StateHasChanged);
+        try
+        {
+            _analytics = await Generator.BuildAnalyticsAsync(_journalId, _selectedSchedules);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
     }
 
     private async Task Generate()

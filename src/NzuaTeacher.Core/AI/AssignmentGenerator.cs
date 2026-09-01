@@ -84,7 +84,8 @@ public sealed class AssignmentGenerator(IDbContextFactory<TeacherDbContext> dbFa
     {
         await using var db = await dbFactory.CreateDbContextAsync();
 
-        var journal = await db.Journals.AsNoTracking().FirstAsync(j => j.JournalId == journalId);
+        var journal = await db.Journals.AsNoTracking().FirstOrDefaultAsync(j => j.JournalId == journalId)
+            ?? throw new InvalidOperationException("Журнал відсутній у збережених даних. Спочатку оновіть його з NZ.UA.");
         var students = await db.Students.AsNoTracking()
             .Where(s => s.JournalId == journalId).OrderBy(s => s.OrderIndex).ToListAsync();
         var marks = await db.Marks.AsNoTracking()
