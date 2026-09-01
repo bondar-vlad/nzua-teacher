@@ -1,0 +1,245 @@
+@page "/sync"
+@inject OutboxService Outbox
+@inject SyncService Sync
+@inject JournalStore Store
+@implements IDisposable
+
+<div class="page-header">
+    <div>
+        <h1>Синхронізація з NZ.UA</h1>
+        <div class="subtitle">Ви самі вирішуєте, що і коли надсилати. Нічого не відправляється автоматично.</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn primary" @onclick="ConfirmPush" disabled="@(_busy || SelectedCount == 0)">
+        ⬆️ Надіслати вибране (@SelectedCount)
+    </button>
+</div>
+
+@if (_notice is not null)
+{
+    <div class="alert @_noticeClass">@_notice <button class="btn-icon" @onclick="() => _notice = null">✕</button></div>
+}
+
+@if (_ops.Count == 0)
+{
+    <div class="empty-state">
+        <div class="icon">✅</div>
+        <div>Черга порожня — всі локальні зміни синхронізовано.</div>
+    </div>
+}
+else
+{
+    @foreach (var journalGroup in _ops.GroupBy(o => o.JournalId))
+    {
+        var journal = _journals.FirstOrDefault(j => j.JournalId == journalGroup.Key);
+        <div class="sync-group card">
+            <h3>
+                📓 @(journal is null ? $"Журнал {journalGroup.Key}" : $"{journal.ClassName} — {journal.Subject}")
+                <button class="btn small" @onclick="() => ToggleJournal(journalGroup.Key)">
+                    @(journalGroup.All(o => _selected.Contains(o.Id)) ? "Зняти все" : "Вибрати все")
+                </button>
+            </h3>
+
+            @foreach (var typeGroup in journalGroup.GroupBy(o => o.Type))
+            {
+                <div class="subtitle" style="margin:8px 0 4px">@TypeLabel(typeGroup.Key) (@typeGroup.Count())</div>
+                @foreach (var op in typeGroup)
+                {
+                    <div class="op-row status-@op.Status.ToString().ToLowerInvariant()">
+                        @if (op.Status == PendingOpStatus.Conflict)
+                        {
+                            <span title="Конфлікт">⚠️</span>
+                        }
+                        else
+                        {
+                            <input type="checkbox" checked="@_selected.Contains(op.Id)"
+                                   @onchange="e => ToggleOp(op.Id, (bool)e.Value!)" />
+                        }
+                        <span class="op-summary">
+                            @op.Summary
+                            <span class="subtitle">· @op.CreatedAtUtc.ToLocalTime().ToString("dd.MM HH:mm")</span>
+                            @if (op.Error is not null)
+                            {
+                                <div class="op-error">@op.Error</div>
+                            }
+                        </span>
+                        @if (op.Status == PendingOpStatus.Conflict)
+                        {
+                            <button class="btn small primary" title="Надіслати моє значення попри зміни на сервері"
+                                    @onclick="() => TakeMine(op.Id)">Взяти моє</button>
+                            <button class="btn small" title="Відмовитися від моєї правки, лишити серверне значення"
+                                    @onclick="() => Discard(op.Id)">Лишити серверне</button>
+                        }
+                        else
+                        {
+                            <button class="btn-icon" title="Відкинути цю локальну зміну" @onclick="() => Discard(op.Id)">🗑</button>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    }
+}
+
+@if (_progressLines.Count > 0)
+{
+    <div class="sync-progress">@string.Join("\n", _progressLines)</div>
+}
+
+<div class="card" style="margin-top:18px">
+    <h3>Історія синхронізацій</h3>
+    @if (_log.Count == 0)
+    {
+        <div class="subtitle" style="padding:8px 0">Поки порожньо.</div>
+    }
+    else
+    {
+        @foreach (var entry in _log)
+        {
+            <div class="op-row">
+                <span>@(entry.Success ? "✅" : "❌")</span>
+                <span class="op-summary">@entry.Details</span>
+                <span class="subtitle">@entry.AtUtc.ToLocalTime().ToString("dd.MM HH:mm")</span>
+            </div>
+        }
+    }
+</div>
+
+<Modal Visible="_confirmVisible" VisibleChanged="v => _confirmVisible = v" Title="Підтвердження надсилання">
+    <p>До NZ.UA буде надіслано <b>@SelectedCount</b> змін(у):</p>
+    <ul style="max-height:220px; overflow:auto">
+        @foreach (var op in _ops.Where(o => _selected.Contains(o.Id)))
+        {
+            <li>@TypeLabel(op.Type): @op.Summary</li>
+        }
+    </ul>
+    <p class="subtitle">Перед записом буде звірено актуальний стан на сервері, після — перевірено результат.</p>
+    <div style="display:flex; justify-content:flex-end; gap:8px">
+        <button class="btn" @onclick="() => _confirmVisible = false">Скасувати</button>
+        <button class="btn primary" @onclick="DoPush" disabled="@_busy">
+            @if (_busy)
+            {
+                <span class="spinner"></span>
+            }
+            Надіслати
+        </button>
+    </div>
+</Modal>
+
+@code {
+    private List<PendingOp> _ops = [];
+    private List<CachedJournal> _journals = [];
+    private List<SyncLogEntry> _log = [];
+    private readonly HashSet<long> _selected = [];
+    private readonly List<string> _progressLines = [];
+    private bool _busy;
+    private bool _confirmVisible;
+    private string? _notice;
+    private string _noticeClass = "ok";
+
+    private int SelectedCount => _selected.Count;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Sync.Progress += OnProgress;
+        await Reload(selectAll: true);
+    }
+
+    private async Task Reload(bool selectAll = false)
+    {
+        _ops = await Outbox.GetPendingAsync();
+        _journals = await Store.GetJournalsAsync();
+        _log = await Sync.GetLogAsync(20);
+        if (selectAll)
+        {
+            _selected.Clear();
+            foreach (var op in _ops.Where(o => o.Status != PendingOpStatus.Conflict))
+                _selected.Add(op.Id);
+        }
+        else
+        {
+            _selected.RemoveWhere(id => !_ops.Any(o => o.Id == id && o.Status != PendingOpStatus.Conflict));
+        }
+    }
+
+    private void ToggleOp(long id, bool on)
+    {
+        if (on) _selected.Add(id);
+        else _selected.Remove(id);
+    }
+
+    private void ToggleJournal(string journalId)
+    {
+        var ids = _ops.Where(o => o.JournalId == journalId && o.Status != PendingOpStatus.Conflict).Select(o => o.Id).ToList();
+        if (ids.All(_selected.Contains))
+            foreach (var id in ids) _selected.Remove(id);
+        else
+            foreach (var id in ids) _selected.Add(id);
+    }
+
+    private void ConfirmPush() => _confirmVisible = true;
+
+    private async Task DoPush()
+    {
+        _busy = true;
+        _progressLines.Clear();
+        StateHasChanged();
+        try
+        {
+            var outcomes = await Sync.PushAsync(_selected.ToList());
+            var ok = outcomes.Count(o => o.Status == PendingOpStatus.Synced);
+            var conflicts = outcomes.Count(o => o.Status == PendingOpStatus.Conflict);
+            var failed = outcomes.Count(o => o.Status == PendingOpStatus.Failed);
+            Notify($"Надіслано: {ok}. Конфлікти: {conflicts}. Помилки: {failed}.",
+                failed > 0 || conflicts > 0 ? "warn" : "ok");
+            _confirmVisible = false;
+        }
+        catch (Exception ex)
+        {
+            Notify($"Синхронізація не вдалася: {ex.Message}", "error");
+        }
+        finally
+        {
+            _busy = false;
+            await Reload();
+        }
+    }
+
+    private async Task TakeMine(long opId)
+    {
+        await Outbox.RetakeMineAsync(opId);
+        await Reload();
+        _selected.Add(opId);
+    }
+
+    private async Task Discard(long opId)
+    {
+        await Outbox.DiscardOpAsync(opId);
+        await Reload();
+    }
+
+    private async void OnProgress(string line)
+    {
+        _progressLines.Add(line);
+        if (_progressLines.Count > 40) _progressLines.RemoveAt(0);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Notify(string text, string cls)
+    {
+        _notice = text;
+        _noticeClass = cls;
+    }
+
+    private static string TypeLabel(PendingOpType t) => t switch
+    {
+        PendingOpType.SetMark => "🔢 Оцінки",
+        PendingOpType.AddLesson => "➕ Нові уроки",
+        PendingOpType.EditLesson => "✏️ Зміни уроків",
+        PendingOpType.DeleteLesson => "🗑 Видалення уроків",
+        PendingOpType.SetHomework => "📋 Теми та ДЗ",
+        _ => t.ToString(),
+    };
+
+    public void Dispose() => Sync.Progress -= OnProgress;
+}

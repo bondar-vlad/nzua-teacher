@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/external/" />
+  <Folder Name="/external/nzua-mcp/">
+    <Project Path="external/nzua-mcp/NzuaMcp.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/NzuaTeacher.Core/NzuaTeacher.Core.csproj" />
+    <Project Path="src/NzuaTeacher/NzuaTeacher.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NzuaTeacher.Tests/NzuaTeacher.Tests.csproj" />
+  </Folder>
+</Solution>

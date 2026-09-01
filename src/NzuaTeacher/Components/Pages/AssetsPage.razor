@@ -1,0 +1,81 @@
+@page "/assets"
+@using Microsoft.EntityFrameworkCore
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<TeacherDbContext> DbFactory
+
+<div class="page-header">
+    <div>
+        <h1>Мої матеріали</h1>
+        <div class="subtitle">Згенеровані роботи та інтерактиви. Зберігаються локально на цьому компʼютері.</div>
+    </div>
+</div>
+
+@if (_assets.Count == 0)
+{
+    <div class="empty-state">
+        <div class="icon">📚</div>
+        <div>Поки порожньо. Створіть першу роботу в <a href="generator">Генераторі робіт</a>.</div>
+    </div>
+}
+else
+{
+    <div class="cards-grid">
+        @foreach (var a in _assets)
+        {
+            <div class="card">
+                <div class="title" style="font-weight:600">@a.Title</div>
+                <div class="meta subtitle" style="margin:4px 0 10px">
+                    @(a.Kind == "printable" ? "🖨 Для друку" : "🖥 Інтерактив") ·
+                    @a.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                </div>
+                <div style="display:flex; gap:8px">
+                    <button class="btn small primary" @onclick="() => Open(a)">Відкрити</button>
+                    <button class="btn small danger" @onclick="() => Delete(a.Id)">Видалити</button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@if (_error is not null)
+{
+    <div class="alert error" style="margin-top:12px">@_error</div>
+}
+
+@code {
+    private List<GeneratedAssetEntity> _assets = [];
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _assets = await db.Assets.AsNoTracking().OrderByDescending(a => a.CreatedAtUtc).ToListAsync();
+    }
+
+    private async Task Open(GeneratedAssetEntity asset)
+    {
+        try
+        {
+            var path = Path.Combine(AppPaths.AssetsDir, $"asset-{asset.Id}.html");
+            await File.WriteAllTextAsync(path, asset.Html);
+            await Launcher.Default.OpenAsync(new OpenFileRequest(asset.Title, new ReadOnlyFile(path)));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task Delete(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.Assets.FindAsync(id);
+        if (row is not null)
+        {
+            db.Assets.Remove(row);
+            await db.SaveChangesAsync();
+        }
+        await Reload();
+    }
+}

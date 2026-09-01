@@ -1,0 +1,118 @@
+@page "/"
+@inject JournalStore Store
+@inject SyncService Sync
+@inject NzuaSessionService Session
+@inject NavigationManager Nav
+
+<div class="page-header">
+    <div>
+        <h1>Мої журнали</h1>
+        <div class="subtitle">Дані з локального кешу — працюють і без інтернету</div>
+    </div>
+    <div class="spacer"></div>
+    @if (_semesters.Count > 0)
+    {
+        <select @bind="_selectedSemester">
+            @foreach (var s in _semesters)
+            {
+                <option value="@s.SemesterId">@s.Label</option>
+            }
+        </select>
+    }
+    <button class="btn primary" @onclick="RefreshList" disabled="@_busy">
+        @if (_busy)
+        {
+            <span class="spinner"></span>
+        }
+        Оновити список із NZ.UA
+    </button>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert error">@_error</div>
+}
+
+@if (!Session.HasSession && _journals.Count == 0)
+{
+    <div class="alert info">
+        Ви ще не входили в NZ.UA. Відкрийте <a href="settings">Налаштування</a> і натисніть «Увійти в NZ.UA»,
+        або натисніть «Оновити список» — вікно входу відкриється автоматично.
+    </div>
+}
+
+@if (_journals.Count == 0)
+{
+    <div class="empty-state">
+        <div class="icon">📓</div>
+        <div>Кеш порожній. Натисніть «Оновити список із NZ.UA», щоб завантажити журнали.</div>
+    </div>
+}
+else
+{
+    <div class="cards-grid">
+        @foreach (var j in _journals)
+        {
+            <div class="card journal-card" @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">
+                <div class="title">@j.ClassName — @j.Subject</div>
+                <div class="meta">
+                    <span>№ @j.JournalId</span>
+                    <span>@Staleness(j)</span>
+                </div>
+                <div class="actions">
+                    <button class="btn small" @onclick:stopPropagation="true"
+                            @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">Оцінки</button>
+                    <button class="btn small" @onclick:stopPropagation="true"
+                            @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}/topics"))">Теми та ДЗ</button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<CachedJournal> _journals = [];
+    private List<SemesterInfo> _semesters = [];
+    private string? _selectedSemester;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _journals = await Store.GetJournalsAsync();
+        (_semesters, _selectedSemester) = await Store.GetSemestersAsync();
+    }
+
+    private async Task RefreshList()
+    {
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var (_, current) = await Store.GetSemestersAsync();
+            await Sync.RefreshJournalListAsync(
+                _selectedSemester is not null && _selectedSemester != current ? _selectedSemester : null);
+            _journals = await Store.GetJournalsAsync();
+            (_semesters, _selectedSemester) = await Store.GetSemestersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Не вдалося оновити список: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Staleness(CachedJournal j)
+    {
+        if (j.LastPulledAt is null) return "ще не завантажувався";
+        var age = DateTime.UtcNow - j.LastPulledAt.Value;
+        return age.TotalMinutes < 1 ? "оновлено щойно"
+            : age.TotalHours < 1 ? $"оновлено {(int)age.TotalMinutes} хв тому"
+            : age.TotalDays < 1 ? $"оновлено {(int)age.TotalHours} год тому"
+            : $"оновлено {(int)age.TotalDays} дн тому";
+    }
+}

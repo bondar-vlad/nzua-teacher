@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Per-user MSI: встановлення без прав адміністратора у %LocalAppData%\Programs\NzuaTeacher -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="НЗ Вчитель"
+           Manufacturer="Vlad Bondar and contributors"
+           Version="$(var.Version)"
+           UpgradeCode="7b2c3f7e-9a41-4a9e-b0d0-3f4a5c6d7e8f"
+           Scope="perUser"
+           Language="1033"
+           Codepage="65001"
+           InstallerVersion="500"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="Уже встановлено новішу версію «НЗ Вчитель»." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- ARP-запис показує bundle (setup.exe), а не внутрішній MSI -->
+    <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="NzuaTeacher" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Весь каталог publish (self-contained: .NET, WindowsAppSDK, застосунок) -->
+    <Files Include="$(var.AppPublishDir)**" Directory="INSTALLFOLDER" />
+
+    <!-- Ярлики: per-user keypath у реєстрі HKCU -->
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+      <Shortcut Id="StartMenuShortcutFile"
+                Name="НЗ Вчитель"
+                Description="Журнали NZ.UA: офлайн-редагування, синхронізація та AI-помічник"
+                Target="[INSTALLFOLDER]NzuaTeacher.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU" Key="Software\NzuaTeacher" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut" Directory="DesktopFolder">
+      <Shortcut Id="DesktopShortcutFile"
+                Name="НЗ Вчитель"
+                Target="[INSTALLFOLDER]NzuaTeacher.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU" Key="Software\NzuaTeacher" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+  </Package>
+</Wix>

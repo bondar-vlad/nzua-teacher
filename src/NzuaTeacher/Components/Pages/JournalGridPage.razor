@@ -1,0 +1,452 @@
+@page "/journal/{JournalId}"
+@inject JournalStore Store
+@inject OutboxService Outbox
+@inject SyncService Sync
+@inject NzuaMcp.Nzua.Api.JournalApi JournalApi
+@inject NavigationManager Nav
+
+@if (_grid is null)
+{
+    <div class="empty-state">
+        <div class="icon">📓</div>
+        <div>Журнал не знайдено в кеші. Поверніться до <a href="">списку журналів</a> і оновіть його.</div>
+    </div>
+}
+else
+{
+    <div class="page-header">
+        <div>
+            <h1>@_grid.Journal.ClassName — @_grid.Journal.Subject</h1>
+            <div class="subtitle">
+                @Staleness()
+                @if (_grid.PendingCount > 0)
+                {
+                    <span class="chip warn" style="margin-left:8px">не синхронізовано: @_grid.PendingCount</span>
+                }
+                @if (_grid.ConflictCount > 0)
+                {
+                    <span class="chip err" style="margin-left:4px">конфлікти: @_grid.ConflictCount</span>
+                }
+            </div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" @onclick="@(() => Nav.NavigateTo($"journal/{JournalId}/topics"))">📋 Теми та ДЗ</button>
+        <button class="btn" @onclick="OpenAddLesson">➕ Урок</button>
+        <button class="btn primary" @onclick="() => _pullDialogVisible = true">⬇️ Оновити з NZ.UA</button>
+    </div>
+
+    @if (_notice is not null)
+    {
+        <div class="alert @_noticeClass">@_notice <button class="btn-icon" @onclick="() => _notice = null">✕</button></div>
+    }
+
+    <div class="grid-wrap">
+        <table class="journal-grid">
+            <thead>
+                <tr>
+                    <th class="student-col">Учень (@_grid.Students.Count)</th>
+                    @foreach (var l in _grid.Lessons)
+                    {
+                        <th class="@(l.IsLocal ? "local-lesson" : "")" title="@LessonTooltip(l)"
+                            @onclick="() => OpenLessonMenu(l)">
+                            <span class="l-date">@($"{l.Day:00}.{l.Month}")</span>
+                            <span class="l-type">@Abbrev(l.LessonType)</span>
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _grid.Students)
+                {
+                    <tr>
+                        <td class="student-col" title="@s.Name">@s.OrderIndex. @s.Name</td>
+                        @foreach (var l in _grid.Lessons)
+                        {
+                            var cell = _grid.Cells.TryGetValue((l.ScheduleId, s.StudentId), out var c) ? c : null;
+                            var isSelected = _selected is not null && _selected.Value.Lesson.ScheduleId == l.ScheduleId && _selected.Value.Student.StudentId == s.StudentId;
+                            <td>
+                                <button class="cell @(cell?.IsConflict == true ? "conflict" : cell?.IsPending == true ? "pending" : "") @(isSelected ? "selected" : "")"
+                                        title="@cell?.Comment"
+                                        @onclick="() => SelectCell(s, l)">
+                                    <span class="@ValueClass(cell)">@cell?.Value</span>
+                                </button>
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @* ------------------------------- редактор оцінки ------------------------------- *@
+    <Modal Visible="_editorVisible" VisibleChanged="v => _editorVisible = v"
+           Title="@EditorTitle">
+        @if (_selected is not null)
+        {
+            <div class="mark-grid">
+                @for (var g = 1; g <= 12; g++)
+                {
+                    var grade = g;
+                    <button @onclick="() => SetGrade(grade)">@grade</button>
+                }
+            </div>
+            <div class="special-marks">
+                @foreach (var (label, markId) in SpecialButtons)
+                {
+                    var id = markId;
+                    <button title="@SpecialTitle(label)" @onclick="() => SetSpecial(id)">@label</button>
+                }
+            </div>
+            <div class="field">
+                <label>Коментар (необовʼязково)</label>
+                <input type="text" @bind="_comment" placeholder="Наприклад: усна відповідь" />
+            </div>
+            <div style="display:flex; gap:8px; justify-content:space-between">
+                <button class="btn danger" @onclick="DeleteMark">🗑 Видалити оцінку</button>
+                <button class="btn" @onclick="() => _editorVisible = false">Закрити</button>
+            </div>
+        }
+    </Modal>
+
+    @* ------------------------------- меню уроку ------------------------------- *@
+    <Modal Visible="_lessonMenuVisible" VisibleChanged="v => _lessonMenuVisible = v"
+           Title="@($"Урок {_menuLesson?.Day:00}.{_menuLesson?.Month} — {_menuLesson?.LessonType}")">
+        @if (_menuLesson is not null)
+        {
+            <div style="display:flex; flex-direction:column; gap:8px">
+                <button class="btn" @onclick="OpenEditLesson">✏️ Редагувати урок (дата, тип, час)</button>
+                <button class="btn" @onclick="@(() => Nav.NavigateTo($"journal/{JournalId}/topics"))">📋 Тема та ДЗ цього уроку</button>
+                <button class="btn danger" @onclick="DeleteLesson">🗑 Видалити урок</button>
+            </div>
+        }
+    </Modal>
+
+    @* ------------------------------- діалог уроку ------------------------------- *@
+    <Modal Visible="_lessonDialogVisible" VisibleChanged="v => _lessonDialogVisible = v"
+           Title="@(_editingLesson is null ? "Новий урок" : "Редагувати урок")">
+        @if (_form is null)
+        {
+            <div class="alert warn">
+                Форма уроку недоступна в кеші. Потрібне зʼєднання з NZ.UA:
+                <button class="btn small" @onclick="LoadFormOnline">Завантажити форму</button>
+            </div>
+        }
+        else
+        {
+            <div class="field">
+                <label>Дата уроку</label>
+                <input type="date" @bind="_lessonDate" />
+            </div>
+            <div class="field">
+                <label>Тип уроку</label>
+                <select @bind="_lessonTypeId">
+                    @foreach (var t in _form.LessonTypes)
+                    {
+                        <option value="@t.Id">@t.Label</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <label>Час (дзвінок)</label>
+                <select @bind="_buzzerId">
+                    @foreach (var b in _form.Buzzers)
+                    {
+                        <option value="@b.Id">@b.Label</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <label>Кабінет</label>
+                <select @bind="_roomId">
+                    @foreach (var r in _form.Rooms)
+                    {
+                        <option value="@r.Id">@r.Label</option>
+                    }
+                </select>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px">
+                <button class="btn" @onclick="() => _lessonDialogVisible = false">Скасувати</button>
+                <button class="btn primary" @onclick="SaveLesson">Зберегти локально</button>
+            </div>
+        }
+    </Modal>
+
+    @* ------------------------------- pull-діалог ------------------------------- *@
+    <Modal Visible="_pullDialogVisible" VisibleChanged="v => _pullDialogVisible = v"
+           Title="Оновити дані з NZ.UA">
+        <p class="subtitle" style="margin-top:0">
+            Оберіть, що саме оновити. Ваші незасинхронізовані локальні правки не будуть перетерті.
+        </p>
+        <label class="checkbox-row"><input type="checkbox" @bind="_pullLessons" /> Уроки (дати, типи)</label>
+        <label class="checkbox-row"><input type="checkbox" @bind="_pullMarks" /> Оцінки</label>
+        <label class="checkbox-row"><input type="checkbox" @bind="_pullHomework" /> Теми та домашні завдання</label>
+        @if (_pulling)
+        {
+            <div class="alert info"><span class="spinner"></span> @_pullStatus</div>
+        }
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px">
+            <button class="btn" @onclick="() => _pullDialogVisible = false" disabled="@_pulling">Скасувати</button>
+            <button class="btn primary" @onclick="DoPull" disabled="@(_pulling || (!_pullLessons && !_pullMarks && !_pullHomework))">Оновити</button>
+        </div>
+    </Modal>
+}
+
+@code {
+    [Parameter] public string JournalId { get; set; } = "";
+
+    private JournalGrid? _grid;
+    private (CachedStudent Student, CachedLesson Lesson)? _selected;
+    private bool _editorVisible;
+    private string _comment = "";
+    private string? _notice;
+    private string _noticeClass = "info";
+
+    private bool _lessonMenuVisible;
+    private CachedLesson? _menuLesson;
+
+    private bool _lessonDialogVisible;
+    private CachedLesson? _editingLesson;
+    private LessonFormData? _form;
+    private DateTime _lessonDate = DateTime.Today;
+    private string _lessonTypeId = "";
+    private string _buzzerId = "";
+    private string _roomId = "";
+
+    private bool _pullDialogVisible;
+    private bool _pullLessons = true, _pullMarks = true, _pullHomework = true;
+    private bool _pulling;
+    private string _pullStatus = "";
+
+    private static readonly (string Label, int MarkId)[] SpecialButtons =
+    [
+        ("Н", 1), ("Н/А", 2), ("хв", 23), ("зв", 4), ("зар", 3), ("вивч", 5),
+        ("П", 24), ("С", 25), ("Д", 26), ("В", 27), ("Н/О", 28), ("Н/З", 33),
+    ];
+
+    protected override async Task OnParametersSetAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _grid = await Store.GetGridAsync(JournalId);
+        _form ??= await Store.GetLessonFormAsync(JournalId);
+    }
+
+    private string EditorTitle => _selected is null
+        ? ""
+        : $"{_selected.Value.Student.Name} — {_selected.Value.Lesson.Day:00}.{_selected.Value.Lesson.Month}";
+
+    private void SelectCell(CachedStudent s, CachedLesson l)
+    {
+        _selected = (s, l);
+        _comment = "";
+        _editorVisible = true;
+    }
+
+    private async Task SetGrade(int grade)
+    {
+        if (_selected is null) return;
+        await Apply(MarkValueResolver.Resolve(grade: grade));
+    }
+
+    private async Task SetSpecial(int markId)
+    {
+        if (_selected is null) return;
+        await Apply(markId);
+    }
+
+    private async Task DeleteMark()
+    {
+        if (_selected is null) return;
+        await Apply(SpecialMarks.Delete);
+    }
+
+    private async Task Apply(int markId)
+    {
+        var (s, l) = _selected!.Value;
+        try
+        {
+            await Outbox.SetMarkLocallyAsync(JournalId, l.ScheduleId, s.StudentId, markId,
+                string.IsNullOrWhiteSpace(_comment) ? null : _comment.Trim());
+            _editorVisible = false;
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            Notify($"Помилка: {ex.Message}", "error");
+        }
+    }
+
+    private void OpenLessonMenu(CachedLesson l)
+    {
+        _menuLesson = l;
+        _lessonMenuVisible = true;
+    }
+
+    private void OpenAddLesson()
+    {
+        _editingLesson = null;
+        _lessonDate = DateTime.Today;
+        PreselectFormDefaults();
+        _lessonDialogVisible = true;
+    }
+
+    private void OpenEditLesson()
+    {
+        _editingLesson = _menuLesson;
+        _lessonMenuVisible = false;
+        if (_menuLesson is not null &&
+            int.TryParse(_menuLesson.Month, out var month) && month is >= 1 and <= 12)
+        {
+            var year = DateTime.Today.Year;
+            // Навчальний рік: вересень–грудень — попередній календарний рік, якщо зараз січень–серпень.
+            if (month >= 9 && DateTime.Today.Month <= 8) year--;
+            try { _lessonDate = new DateTime(year, month, Math.Min(_menuLesson.Day, DateTime.DaysInMonth(year, month))); }
+            catch { _lessonDate = DateTime.Today; }
+        }
+        PreselectFormDefaults();
+        _lessonDialogVisible = true;
+    }
+
+    private void PreselectFormDefaults()
+    {
+        if (_form is null) return;
+        _lessonTypeId = _form.LessonTypes.FirstOrDefault()?.Id ?? "";
+        _buzzerId = _form.Buzzers.FirstOrDefault()?.Id ?? "";
+        _roomId = _form.Rooms.FirstOrDefault()?.Id ?? "";
+    }
+
+    private async Task LoadFormOnline()
+    {
+        try
+        {
+            var form = await JournalApi.GetLessonForm(JournalId);
+            await Store.SaveLessonFormAsync(JournalId, form);
+            _form = form;
+            PreselectFormDefaults();
+        }
+        catch (Exception ex)
+        {
+            Notify($"Не вдалося завантажити форму: {ex.Message}", "error");
+        }
+    }
+
+    private async Task SaveLesson()
+    {
+        if (_form is null) return;
+        try
+        {
+            var typeLabel = _form.LessonTypes.FirstOrDefault(t => t.Id == _lessonTypeId)?.Label ?? "";
+            var buzzerLabel = _form.Buzzers.FirstOrDefault(b => b.Id == _buzzerId)?.Label ?? "";
+            var date = _lessonDate.ToString("yyyy-MM-dd");
+            var typeId = int.TryParse(_lessonTypeId, out var t) ? t : 0;
+
+            if (_editingLesson is null)
+                await Outbox.AddLessonLocallyAsync(JournalId, typeId, typeLabel, date, _buzzerId, buzzerLabel, _roomId, _form.IsNus ? true : null, null);
+            else
+                await Outbox.EditLessonLocallyAsync(JournalId, _editingLesson.ScheduleId, typeId, typeLabel, date, _buzzerId, _roomId, _form.IsNus ? true : null, null);
+
+            _lessonDialogVisible = false;
+            await Reload();
+            Notify("Збережено локально. Надішліть зміни через «Синхронізацію».", "ok");
+        }
+        catch (Exception ex)
+        {
+            Notify($"Помилка: {ex.Message}", "error");
+        }
+    }
+
+    private async Task DeleteLesson()
+    {
+        if (_menuLesson is null) return;
+        try
+        {
+            await Outbox.DeleteLessonLocallyAsync(JournalId, _menuLesson.ScheduleId);
+            _lessonMenuVisible = false;
+            await Reload();
+            Notify("Урок позначено на видалення. Підтвердіть у «Синхронізації».", "ok");
+        }
+        catch (Exception ex)
+        {
+            _lessonMenuVisible = false;
+            Notify(ex.Message, "error");
+        }
+    }
+
+    private async Task DoPull()
+    {
+        _pulling = true;
+        Sync.Progress += OnPullProgress;
+        try
+        {
+            var scope = PullScope.None;
+            if (_pullLessons) scope |= PullScope.Lessons;
+            if (_pullMarks) scope |= PullScope.Marks;
+            if (_pullHomework) scope |= PullScope.Homework;
+
+            var result = await Sync.PullJournalAsync(JournalId, scope);
+            _pullDialogVisible = false;
+            await Reload();
+            Notify($"Оновлено. Уроки: {result.NewOrChangedLessons}, оцінки: {result.NewOrChangedMarks}, теми/ДЗ: {result.NewOrChangedHomework}." +
+                   (result.ConflictsDetected > 0 ? $" ⚠ Конфліктів: {result.ConflictsDetected} — перегляньте «Синхронізацію»." : ""),
+                result.ConflictsDetected > 0 ? "warn" : "ok");
+        }
+        catch (Exception ex)
+        {
+            Notify($"Не вдалося оновити: {ex.Message}", "error");
+        }
+        finally
+        {
+            Sync.Progress -= OnPullProgress;
+            _pulling = false;
+        }
+    }
+
+    private async void OnPullProgress(string status)
+    {
+        _pullStatus = status;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Notify(string text, string cls)
+    {
+        _notice = text;
+        _noticeClass = cls;
+    }
+
+    private string Staleness() =>
+        _grid?.Journal.LastPulledAt is null
+            ? "Дані ще не завантажували з NZ.UA"
+            : $"Кеш від {_grid.Journal.LastPulledAt.Value.ToLocalTime():dd.MM.yyyy HH:mm}";
+
+    private static string LessonTooltip(CachedLesson l) =>
+        $"{l.Day:00}.{l.Month} — {l.LessonType}{(l.IsLocal ? " (локальний, ще не на сервері)" : "")}. Клік — дії з уроком.";
+
+    private static string Abbrev(string? type) =>
+        string.IsNullOrEmpty(type) ? "" : type.Length <= 12 ? type : type[..12] + "…";
+
+    private static string ValueClass(GridCell? cell)
+    {
+        if (cell is null) return "";
+        if (cell.Value is "Н" or "Н/А" or "хв") return "absent";
+        if (int.TryParse(cell.Value, out var grade))
+            return grade >= 9 ? "high" : grade >= 6 ? "mid" : "low";
+        return "";
+    }
+
+    private string SpecialTitle(string label) => label switch
+    {
+        "Н" => "Відсутній(-я)",
+        "Н/А" => "Відсутній із поважної причини",
+        "хв" => "Хворів(-ла)",
+        "зв" => "Звільнений(-а)",
+        "зар" => "Зараховано",
+        "вивч" => "Вивчено",
+        "П" => "НУШ: початковий рівень",
+        "С" => "НУШ: середній рівень",
+        "Д" => "НУШ: достатній рівень",
+        "В" => "НУШ: високий рівень",
+        "Н/О" => "Не оцінено",
+        "Н/З" => "Не зараховано",
+        _ => label,
+    };
+}

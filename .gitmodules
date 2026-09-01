@@ -1,0 +1,3 @@
+[submodule "external/nzua-mcp"]
+	path = external/nzua-mcp
+	url = https://github.com/bondar-vlad/nzua-mcp

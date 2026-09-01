@@ -1,0 +1,16 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+
+  <PropertyGroup>
+    <OutputName>NzuaTeacher</OutputName>
+    <!-- MSI ProductVersion: лише числова x.y.z (теги vX.Y.Z) -->
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <!-- Каталог самодостатнього publish застосунку -->
+    <AppPublishDir Condition="'$(AppPublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\publish\</AppPublishDir>
+    <DefineConstants>$(DefineConstants);Version=$(Version);AppPublishDir=$(AppPublishDir)</DefineConstants>
+    <SuppressSpecificWarnings>1147</SuppressSpecificWarnings>
+    <!-- ICE38/ICE03 хибно спрацьовують для per-user установки з file-keypath (стандартно для
+         self-contained застосунків у LocalAppData) — валідацію вимикаємо свідомо. -->
+    <SuppressValidation>true</SuppressValidation>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,38 @@
+@if (Visible)
+{
+    <div class="modal-backdrop" @onclick="OnBackdropClick">
+        <div class="modal-window @SizeClass" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <h3>@Title</h3>
+                <button class="btn-icon" @onclick="Close" title="Закрити">✕</button>
+            </div>
+            <div class="modal-body">
+                @ChildContent
+            </div>
+            @if (Footer is not null)
+            {
+                <div class="modal-footer">@Footer</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public bool Wide { get; set; }
+    [Parameter] public bool CloseOnBackdrop { get; set; } = true;
+
+    private string SizeClass => Wide ? "modal-wide" : "";
+
+    private Task OnBackdropClick() => CloseOnBackdrop ? Close() : Task.CompletedTask;
+
+    private async Task Close()
+    {
+        Visible = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+}

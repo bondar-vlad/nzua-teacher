@@ -1,0 +1,68 @@
+@inherits LayoutComponentBase
+@inject NzuaSessionService Session
+@inject OutboxService Outbox
+@implements IDisposable
+
+<div class="page">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-icon">📓</span>
+            <span class="brand-name">НЗ Вчитель</span>
+        </div>
+
+        <nav class="nav">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All"><span>🏠</span> Журнали</NavLink>
+            <NavLink class="nav-link" href="sync">
+                <span>🔄</span> Синхронізація
+                @if (_pendingCount > 0)
+                {
+                    <span class="badge">@_pendingCount</span>
+                }
+            </NavLink>
+            <NavLink class="nav-link" href="chat"><span>🤖</span> AI-помічник</NavLink>
+            <NavLink class="nav-link" href="generator"><span>📝</span> Генератор робіт</NavLink>
+            <NavLink class="nav-link" href="assets"><span>📚</span> Мої матеріали</NavLink>
+            <NavLink class="nav-link" href="settings"><span>⚙️</span> Налаштування</NavLink>
+        </nav>
+
+        <div class="session-status @(Session.HasSession ? "online" : "offline")">
+            @if (Session.HasSession)
+            {
+                <span class="dot"></span>
+                <span>NZ.UA: сесія активна</span>
+            }
+            else
+            {
+                <span class="dot"></span>
+                <span>NZ.UA: не під'єднано</span>
+            }
+        </div>
+    </aside>
+
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+@code {
+    private int _pendingCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.Changed += OnChanged;
+        Outbox.Changed += OnChanged;
+        _pendingCount = await Outbox.GetPendingCountAsync();
+    }
+
+    private async void OnChanged()
+    {
+        _pendingCount = await Outbox.GetPendingCountAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnChanged;
+        Outbox.Changed -= OnChanged;
+    }
+}

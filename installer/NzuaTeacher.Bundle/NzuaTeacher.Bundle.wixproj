@@ -1,0 +1,29 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+
+  <PropertyGroup>
+    <OutputName>NzuaTeacher-Setup</OutputName>
+    <OutputType>Bundle</OutputType>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <!-- Абсолютний шлях: IntermediateOutputPath ще не визначений під час оцінки PropertyGroup -->
+    <WebView2Bootstrapper>$(MSBuildThisFileDirectory)obj\webview2\MicrosoftEdgeWebView2Setup.exe</WebView2Bootstrapper>
+    <DefineConstants>$(DefineConstants);Version=$(Version);WebView2Bootstrapper=$(WebView2Bootstrapper)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.BootstrapperApplications.wixext" Version="6.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NzuaTeacher.Installer\NzuaTeacher.Installer.wixproj" />
+  </ItemGroup>
+
+  <!-- Evergreen bootstrapper WebView2 завантажується на етапі збірки (малий, ~2 МБ) -->
+  <Target Name="DownloadWebView2Bootstrapper" BeforeTargets="CoreCompile" Condition="!Exists('$(WebView2Bootstrapper)')">
+    <MakeDir Directories="$(MSBuildThisFileDirectory)obj\webview2" />
+    <DownloadFile SourceUrl="https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+                  DestinationFolder="$(MSBuildThisFileDirectory)obj\webview2"
+                  DestinationFileName="MicrosoftEdgeWebView2Setup.exe" />
+  </Target>
+
+</Project>

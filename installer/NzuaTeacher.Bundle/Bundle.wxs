@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- setup.exe: ставить WebView2 Runtime (лише якщо відсутній) і сам застосунок -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Bundle Name="НЗ Вчитель"
+          Manufacturer="Vlad Bondar and contributors"
+          Version="$(var.Version)"
+          UpgradeCode="e5a1b2c3-d4e5-4f60-8a7b-9c0d1e2f3a4b"
+
+          Condition="VersionNT >= v10.0">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication LicenseUrl=""
+                                              Theme="hyperlinkLicense"
+                                              SuppressOptionsUI="yes"
+                                              LaunchTarget="[LocalAppDataFolder]Programs\NzuaTeacher\NzuaTeacher.exe" />
+    </BootstrapperApplication>
+
+    <!-- WebView2 Evergreen Runtime: перевірка per-machine і per-user -->
+    <util:RegistrySearch Id="WebView2Machine"
+                         Root="HKLM"
+                         Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv"
+                         Variable="WebView2MachineVersion" />
+    <util:RegistrySearch Id="WebView2User"
+                         Root="HKCU"
+                         Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                         Value="pv"
+                         Variable="WebView2UserVersion" />
+
+    <Chain>
+      <ExePackage Id="WebView2Runtime"
+                  DisplayName="Microsoft Edge WebView2 Runtime"
+                  SourceFile="$(var.WebView2Bootstrapper)"
+                  InstallArguments="/silent /install"
+                  Permanent="yes"
+                  PerMachine="no"
+                  DetectCondition="WebView2MachineVersion OR WebView2UserVersion" />
+
+      <MsiPackage Id="NzuaTeacherMsi"
+                  SourceFile="$(var.NzuaTeacher.Installer.TargetPath)"
+                  Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

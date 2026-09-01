@@ -1,0 +1,15 @@
+# build outputs
+bin/
+obj/
+publish/
+artifacts/
+
+# IDE
+.vs/
+.idea/
+*.user
+
+# local state
+*.db
+*.db-shm
+*.db-wal

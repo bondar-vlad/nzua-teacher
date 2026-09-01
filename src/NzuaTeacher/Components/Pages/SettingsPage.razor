@@ -1,0 +1,304 @@
+@page "/settings"
+@using Microsoft.Extensions.AI
+@inject NzuaSessionService Session
+@inject AiSettingsService AiSettings
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<TeacherDbContext> DbFactory
+
+<div class="page-header">
+    <div>
+        <h1>Налаштування</h1>
+    </div>
+</div>
+
+@if (_notice is not null)
+{
+    <div class="alert @_noticeClass">@_notice <button class="btn-icon" @onclick="() => _notice = null">✕</button></div>
+}
+
+<div class="settings-grid">
+
+    <div class="card">
+        <h2>🔐 Сесія NZ.UA</h2>
+        @if (Session.HasSession)
+        {
+            <p>Сесія активна.
+                @if (Session.ExpiresAt is { } exp)
+                {
+                    <span class="subtitle">Дійсна до @exp.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</span>
+                }
+            </p>
+            <button class="btn danger" @onclick="Logout">Вийти</button>
+        }
+        else
+        {
+            <p class="subtitle">
+                Вхід відбувається у справжньому вікні браузера (пароль не зберігається в застосунку).
+                Сесія спільна з nzua-mcp для Claude Desktop.
+            </p>
+            <button class="btn primary" @onclick="Login" disabled="@_loggingIn">
+                @if (_loggingIn)
+                {
+                    <span class="spinner"></span>
+                }
+                Увійти в NZ.UA
+            </button>
+        }
+    </div>
+
+    @foreach (var provider in Enum.GetValues<AiProvider>())
+    {
+        <div class="card provider-card @(AiSettings.ActiveProvider == provider ? "active-provider" : "")">
+            <h2>@ProviderIcon(provider) @AiSettingsService.ProviderNames[provider]</h2>
+            @if (provider == AiProvider.Gemini)
+            {
+                <p class="subtitle">
+                    Безоплатний ключ: <b>aistudio.google.com</b> → Get API key.
+                    Увага: на безоплатному тарифі Google може використовувати дані для покращення моделей —
+                    тому за замовчуванням у чат ідуть псевдоніми учнів.
+                </p>
+            }
+            <div class="field">
+                <label>API-ключ @(_hasKey[provider] ? "(збережено ✓)" : "")</label>
+                <div class="key-row">
+                    <input type="password" @bind="_keyInputs[provider]" placeholder="@(_hasKey[provider] ? "•••••••• (введіть новий, щоб замінити)" : "вставте ключ…")" />
+                    <button class="btn" @onclick="() => SaveKey(provider)">Зберегти</button>
+                </div>
+            </div>
+            <div class="field">
+                <label>Модель</label>
+                <div class="key-row">
+                    <input type="text" @bind="_modelInputs[provider]" />
+                    <button class="btn" @onclick="() => SaveModel(provider)">OK</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+                <button class="btn small @(AiSettings.ActiveProvider == provider ? "primary" : "")"
+                        @onclick="() => SetActive(provider)">
+                    @(AiSettings.ActiveProvider == provider ? "✓ Активний" : "Зробити активним")
+                </button>
+                <button class="btn small" @onclick="() => TestKey(provider)" disabled="@(_testing || !_hasKey[provider])">
+                    @if (_testing)
+                    {
+                        <span class="spinner"></span>
+                    }
+                    Перевірити ключ
+                </button>
+                @if (_hasKey[provider])
+                {
+                    <button class="btn small danger" @onclick="() => RemoveKey(provider)">Видалити ключ</button>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="card">
+        <h2>🎤 Голосовий ввід</h2>
+        <div class="field">
+            <label>Провайдер розшифровки</label>
+            <select @bind="_transcriptionProvider" @bind:after="SaveTranscription">
+                <option value="@AiProvider.Gemini">Gemini (безоплатний тариф)</option>
+                <option value="@AiProvider.OpenAi">OpenAI Whisper</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>🛡 Приватність</h2>
+        <label class="checkbox-row">
+            <input type="checkbox" checked="@_showRealNames" @onchange="ToggleRealNames" />
+            Надсилати AI реальні імена учнів
+        </label>
+        <p class="subtitle">
+            Вимкнено (рекомендовано): AI бачить стабільні псевдоніми «Учень-XXXXX»,
+            а застосунок сам показує вам реальні імена. Ввімкнення передає ПІБ учнів хмарному провайдеру.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>💾 Локальний кеш</h2>
+        <p class="subtitle">
+            База: @NzuaTeacher.Core.AppPaths.DbPath<br />
+            Розмір: @_dbSize
+        </p>
+        <button class="btn danger" @onclick="() => _clearCacheVisible = true">Очистити кеш журналів</button>
+    </div>
+
+</div>
+
+<Modal Visible="_clearCacheVisible" VisibleChanged="v => _clearCacheVisible = v" Title="Очистити кеш?">
+    <p>Буде видалено локальні копії журналів, оцінок і тем. <b>Незасинхронізовані зміни теж буде втрачено.</b></p>
+    <p>Матеріали генератора і налаштування залишаться.</p>
+    <div style="display:flex; justify-content:flex-end; gap:8px">
+        <button class="btn" @onclick="() => _clearCacheVisible = false">Скасувати</button>
+        <button class="btn danger" @onclick="ClearCache">Очистити</button>
+    </div>
+</Modal>
+
+@code {
+    private readonly Dictionary<AiProvider, string> _keyInputs = [];
+    private readonly Dictionary<AiProvider, string> _modelInputs = [];
+    private readonly Dictionary<AiProvider, bool> _hasKey = [];
+    private string _transcriptionProvider = "";
+    private bool _showRealNames;
+    private bool _loggingIn;
+    private bool _testing;
+    private bool _clearCacheVisible;
+    private string? _notice;
+    private string _noticeClass = "ok";
+    private string _dbSize = "—";
+
+    protected override async Task OnInitializedAsync()
+    {
+        foreach (var p in Enum.GetValues<AiProvider>())
+        {
+            _keyInputs[p] = "";
+            _modelInputs[p] = AiSettings.GetModel(p);
+            _hasKey[p] = !string.IsNullOrEmpty(await AiSettings.GetApiKeyAsync(p));
+        }
+        _transcriptionProvider = AiSettings.TranscriptionProvider.ToString();
+        _showRealNames = AiSettings.ShowRealNamesInChat;
+        _dbSize = GetDbSize();
+    }
+
+    private async Task Login()
+    {
+        _loggingIn = true;
+        StateHasChanged();
+        try
+        {
+            await Session.LoginAsync();
+            Notify("Вхід виконано. Сесію збережено.", "ok");
+        }
+        catch (Exception ex)
+        {
+            Notify($"Не вдалося увійти: {ex.Message}", "error");
+        }
+        finally
+        {
+            _loggingIn = false;
+        }
+    }
+
+    private void Logout()
+    {
+        Session.Logout();
+        Notify("Сесію очищено.", "ok");
+    }
+
+    private async Task SaveKey(AiProvider provider)
+    {
+        var key = _keyInputs[provider];
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            Notify("Вставте ключ у поле.", "warn");
+            return;
+        }
+        await AiSettings.SetApiKeyAsync(provider, key);
+        _keyInputs[provider] = "";
+        _hasKey[provider] = true;
+        Notify($"Ключ {AiSettingsService.ProviderNames[provider]} збережено в захищеному сховищі Windows.", "ok");
+    }
+
+    private void SaveModel(AiProvider provider)
+    {
+        AiSettings.SetModel(provider, _modelInputs[provider]);
+        _modelInputs[provider] = AiSettings.GetModel(provider);
+        Notify("Модель збережено.", "ok");
+    }
+
+    private void SetActive(AiProvider provider)
+    {
+        AiSettings.ActiveProvider = provider;
+        Notify($"Активний провайдер: {AiSettingsService.ProviderNames[provider]}.", "ok");
+    }
+
+    private void RemoveKey(AiProvider provider)
+    {
+        AiSettings.RemoveApiKey(provider);
+        _hasKey[provider] = false;
+        Notify("Ключ видалено.", "ok");
+    }
+
+    private async Task TestKey(AiProvider provider)
+    {
+        _testing = true;
+        StateHasChanged();
+        try
+        {
+            var key = await AiSettings.GetApiKeyAsync(provider);
+            var config = new AiProviderConfig(provider, AiSettings.GetModel(provider), key!);
+            var client = ChatClientFactory.Create(config, withFunctionInvocation: false);
+            var response = await client.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "Відповідай одним словом: працює")],
+                new ChatOptions { MaxOutputTokens = 20 });
+            Notify($"✓ Ключ працює. Відповідь моделі: {response.Text}", "ok");
+        }
+        catch (Exception ex)
+        {
+            Notify($"✗ Перевірка не вдалася: {ex.Message}", "error");
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private Task SaveTranscription()
+    {
+        if (Enum.TryParse<AiProvider>(_transcriptionProvider, out var p))
+            AiSettings.TranscriptionProvider = p;
+        return Task.CompletedTask;
+    }
+
+    private void ToggleRealNames(ChangeEventArgs e)
+    {
+        _showRealNames = (bool)e.Value!;
+        AiSettings.ShowRealNamesInChat = _showRealNames;
+        Notify(_showRealNames
+            ? "Увага: реальні імена учнів тепер передаються AI-провайдеру."
+            : "Псевдоніми ввімкнено — ПІБ учнів не залишають цей компʼютер.", _showRealNames ? "warn" : "ok");
+    }
+
+    private async Task ClearCache()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Journals.RemoveRange(db.Journals);
+        db.Students.RemoveRange(db.Students);
+        db.Lessons.RemoveRange(db.Lessons);
+        db.Marks.RemoveRange(db.Marks);
+        db.Homework.RemoveRange(db.Homework);
+        db.LessonForms.RemoveRange(db.LessonForms);
+        db.PendingOps.RemoveRange(db.PendingOps);
+        await db.SaveChangesAsync();
+        _clearCacheVisible = false;
+        _dbSize = GetDbSize();
+        Notify("Кеш очищено.", "ok");
+    }
+
+    private static string GetDbSize()
+    {
+        try
+        {
+            var info = new FileInfo(NzuaTeacher.Core.AppPaths.DbPath);
+            return info.Exists ? $"{info.Length / 1024.0 / 1024.0:0.0} МБ" : "—";
+        }
+        catch
+        {
+            return "—";
+        }
+    }
+
+    private static string ProviderIcon(AiProvider p) => p switch
+    {
+        AiProvider.Gemini => "🔷",
+        AiProvider.OpenAi => "🟢",
+        AiProvider.Anthropic => "🟠",
+        _ => "🤖",
+    };
+
+    private void Notify(string text, string cls)
+    {
+        _notice = text;
+        _noticeClass = cls;
+    }
+}

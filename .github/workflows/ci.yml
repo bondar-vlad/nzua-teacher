@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui-windows
+
+      - name: Restore
+        run: dotnet restore NzuaTeacher.slnx
+
+      - name: Build
+        run: dotnet build NzuaTeacher.slnx --no-restore
+
+      - name: Test
+        run: dotnet test tests/NzuaTeacher.Tests/NzuaTeacher.Tests.csproj --no-build

@@ -1,0 +1,258 @@
+@page "/generator"
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.AI
+@inject JournalStore Store
+@inject AssignmentGenerator Generator
+@inject AiSettingsService AiSettings
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<TeacherDbContext> DbFactory
+
+<div class="page-header">
+    <div>
+        <h1>Генератор робіт</h1>
+        <div class="subtitle">
+            Диференційовані самостійні та контрольні на основі успішності учнів.
+            До AI надсилаються лише псевдоніми і статистика — без ПІБ.
+        </div>
+    </div>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert error">@_error <button class="btn-icon" @onclick="() => _error = null">✕</button></div>
+}
+
+<div class="card" style="max-width:860px">
+    <div class="field">
+        <label>Журнал</label>
+        <select @bind="_journalId" @bind:after="OnJournalChanged">
+            <option value="">— оберіть журнал —</option>
+            @foreach (var j in _journals)
+            {
+                <option value="@j.JournalId">@j.ClassName — @j.Subject</option>
+            }
+        </select>
+    </div>
+
+    @if (_lessons.Count > 0)
+    {
+        <div class="field">
+            <label>Теми для роботи (уроки з темами; позначте потрібні)</label>
+            <div style="max-height:200px; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:8px 12px">
+                @foreach (var l in _lessons)
+                {
+                    <label class="checkbox-row">
+                        <input type="checkbox" checked="@_selectedSchedules.Contains(l.ScheduleId)"
+                               @onchange="e => ToggleLesson(l.ScheduleId, (bool)e.Value!)" />
+                        <span>@l.Date — @l.Topic</span>
+                    </label>
+                }
+            </div>
+        </div>
+    }
+
+    <div style="display:flex; gap:14px; flex-wrap:wrap">
+        <div class="field">
+            <label>Тип роботи</label>
+            <select @bind="_workType">
+                <option>самостійна робота</option>
+                <option>контрольна робота</option>
+                <option>діагностувальна робота</option>
+                <option>практична робота</option>
+            </select>
+        </div>
+        <div class="field">
+            <label>Варіантів на групу</label>
+            <select @bind="_variants">
+                <option value="1">1</option>
+                <option value="2">2</option>
+            </select>
+        </div>
+        <div class="field" style="justify-content:flex-end">
+            <label class="checkbox-row" style="padding-bottom:10px">
+                <input type="checkbox" @bind="_differentiate" />
+                Диференціювати за рівнями (групи А/Б/В)
+            </label>
+        </div>
+    </div>
+
+    <div class="field">
+        <label>Додаткові побажання (необовʼязково)</label>
+        <textarea rows="2" @bind="_extra" placeholder="Наприклад: додай одну задачу на логіку, уникай тестових питань…"></textarea>
+    </div>
+
+    @if (_analytics is not null && _differentiate)
+    {
+        <div class="alert info">
+            Групи за успішністю (@_analytics.Students.Count учнів):
+            А — @_analytics.Students.Count(s => s.Group == "А"),
+            Б — @_analytics.Students.Count(s => s.Group == "Б"),
+            В — @_analytics.Students.Count(s => s.Group == "В").
+            @if (_analytics.WeakTopics.Count > 0)
+            {
+                <div>Слабкі теми: @string.Join("; ", _analytics.WeakTopics)</div>
+            }
+        </div>
+    }
+
+    <button class="btn primary" @onclick="Generate" disabled="@(_busy || _journalId == "")">
+        @if (_busy)
+        {
+            <span class="spinner"></span>
+        }
+        ✨ Згенерувати роботу
+    </button>
+</div>
+
+@if (_doc is not null)
+{
+    <div class="card" style="margin-top:16px; max-width:860px">
+        <h2>@_doc.Title</h2>
+        <div class="subtitle">@_doc.Subject · @_doc.ClassName · @_doc.WorkType · @_doc.DurationMinutes хв</div>
+        @foreach (var g in _doc.Groups)
+        {
+            <h3 style="margin-top:12px">@g.Name <span class="subtitle">@g.LevelNote</span></h3>
+            @if (g.StudentPseudonyms.Count > 0)
+            {
+                <div class="subtitle">Учні: @string.Join(", ", g.StudentPseudonyms)</div>
+            }
+            @foreach (var v in g.Variants)
+            {
+                <details style="margin:6px 0">
+                    <summary>Варіант @v.Label (@v.Tasks.Count завдань)</summary>
+                    <ol>
+                        @foreach (var t in v.Tasks.OrderBy(t => t.Number))
+                        {
+                            <li>@t.Text <span class="chip">@t.Points б.</span></li>
+                        }
+                    </ol>
+                </details>
+            }
+        }
+        <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap">
+            <button class="btn primary" @onclick="() => SaveAndOpen(true)">🖨 Друк / PDF</button>
+            <button class="btn" @onclick="() => SaveAndOpen(false)">🖥 Інтерактив для дошки</button>
+        </div>
+        @if (_savedNote is not null)
+        {
+            <div class="alert ok" style="margin-top:10px">@_savedNote</div>
+        }
+    </div>
+}
+
+@code {
+    private sealed record LessonOption(string ScheduleId, string Date, string Topic);
+
+    private List<CachedJournal> _journals = [];
+    private List<LessonOption> _lessons = [];
+    private readonly HashSet<string> _selectedSchedules = [];
+    private string _journalId = "";
+    private string _workType = "самостійна робота";
+    private int _variants = 2;
+    private bool _differentiate = true;
+    private string _extra = "";
+    private bool _busy;
+    private string? _error;
+    private string? _savedNote;
+    private ClassAnalytics? _analytics;
+    private AssignmentDoc? _doc;
+
+    protected override async Task OnInitializedAsync() =>
+        _journals = await Store.GetJournalsAsync();
+
+    private async Task OnJournalChanged()
+    {
+        _lessons = [];
+        _selectedSchedules.Clear();
+        _analytics = null;
+        _doc = null;
+        if (string.IsNullOrEmpty(_journalId)) return;
+
+        var grid = await Store.GetGridAsync(_journalId);
+        if (grid is null) return;
+        _lessons = grid.Lessons
+            .Select(l =>
+            {
+                grid.HomeworkBySchedule.TryGetValue(l.ScheduleId, out var hw);
+                return new LessonOption(l.ScheduleId, $"{l.Day:00}.{l.Month}", hw?.Topic ?? "");
+            })
+            .Where(o => !string.IsNullOrWhiteSpace(o.Topic))
+            .ToList();
+
+        _analytics = await Generator.BuildAnalyticsAsync(_journalId, []);
+    }
+
+    private async void ToggleLesson(string scheduleId, bool on)
+    {
+        if (on) _selectedSchedules.Add(scheduleId);
+        else _selectedSchedules.Remove(scheduleId);
+        _analytics = await Generator.BuildAnalyticsAsync(_journalId, _selectedSchedules);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task Generate()
+    {
+        var config = await AiSettings.GetActiveConfigAsync();
+        if (config is null)
+        {
+            _error = "Немає API-ключа активного AI-провайдера. Додайте його в Налаштуваннях.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _doc = null;
+        _savedNote = null;
+        StateHasChanged();
+        try
+        {
+            _analytics = await Generator.BuildAnalyticsAsync(_journalId, _selectedSchedules);
+            var spec = new AssignmentSpec(_journalId, _selectedSchedules.ToList(), _workType, _differentiate, _variants,
+                string.IsNullOrWhiteSpace(_extra) ? null : _extra.Trim());
+            var client = ChatClientFactory.Create(config, withFunctionInvocation: false);
+            _doc = await Generator.GenerateAsync(client, spec, _analytics);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Не вдалося згенерувати: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveAndOpen(bool printable)
+    {
+        if (_doc is null) return;
+        try
+        {
+            var html = printable ? AssetRenderers.RenderPrintable(_doc) : AssetRenderers.RenderInteractive(_doc);
+            var kind = printable ? "printable" : "interactive";
+
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                db.Assets.Add(new GeneratedAssetEntity
+                {
+                    Title = _doc.Title,
+                    Kind = kind,
+                    Html = html,
+                    CreatedAtUtc = DateTime.UtcNow,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var fileName = $"{DateTime.Now:yyyyMMdd-HHmm}-{kind}.html";
+            var path = Path.Combine(AppPaths.AssetsDir, fileName);
+            await File.WriteAllTextAsync(path, html);
+            await Launcher.Default.OpenAsync(new OpenFileRequest(_doc.Title, new ReadOnlyFile(path)));
+
+            _savedNote = printable
+                ? "Збережено в «Мої матеріали» і відкрито в браузері. Для PDF натисніть Ctrl+P → «Зберегти як PDF»."
+                : "Збережено в «Мої матеріали» і відкрито в браузері. Кнопка «⛶ Повний екран» — для інтерактивної дошки.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Не вдалося відкрити: {ex.Message}";
+        }
+    }
+}

@@ -1,0 +1,175 @@
+@page "/journal/{JournalId}/topics"
+@inject JournalStore Store
+@inject OutboxService Outbox
+@inject NavigationManager Nav
+
+@if (_grid is null)
+{
+    <div class="empty-state"><div class="icon">📋</div><div>Журнал не знайдено в кеші.</div></div>
+}
+else
+{
+    <div class="page-header">
+        <div>
+            <h1>Теми та ДЗ — @_grid.Journal.ClassName, @_grid.Journal.Subject</h1>
+            <div class="subtitle">Редагуйте прямо в таблиці. Зміни зберігаються локально й надсилаються через «Синхронізацію».</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" @onclick="@(() => Nav.NavigateTo($"journal/{JournalId}"))">🔢 Оцінки</button>
+        <button class="btn primary" @onclick="() => _pasteVisible = true">📥 Вставити теми з КТП</button>
+    </div>
+
+    @if (_notice is not null)
+    {
+        <div class="alert @_noticeClass">@_notice <button class="btn-icon" @onclick="() => _notice = null">✕</button></div>
+    }
+
+    <table class="topics-table">
+        <thead>
+            <tr>
+                <th style="width:80px">Дата</th>
+                <th style="width:150px">Тип уроку</th>
+                <th style="width:70px">№ уроку</th>
+                <th>Тема уроку</th>
+                <th>Домашнє завдання</th>
+                <th style="width:70px"></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var l in _grid.Lessons)
+            {
+                var row = GetRow(l.ScheduleId);
+                <tr class="@(row.Dirty ? "row-pending" : "")">
+                    <td>@($"{l.Day:00}.{l.Month}")@(l.IsLocal ? " 🆕" : "")</td>
+                    <td>@l.LessonType</td>
+                    <td><input type="text" @bind="row.LessonNumber" @bind:after="() => row.Dirty = true" /></td>
+                    <td><textarea rows="2" @bind="row.Topic" @bind:after="() => row.Dirty = true"></textarea></td>
+                    <td><textarea rows="2" @bind="row.Homework" @bind:after="() => row.Dirty = true"></textarea></td>
+                    <td>
+                        @if (row.Dirty)
+                        {
+                            <button class="btn small primary" @onclick="() => SaveRow(l.ScheduleId)">💾</button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    @if (_rows.Values.Any(r => r.Dirty))
+    {
+        <div style="position:sticky; bottom:12px; margin-top:12px; text-align:right">
+            <button class="btn primary" @onclick="SaveAll">💾 Зберегти всі зміни (@_rows.Values.Count(r => r.Dirty))</button>
+        </div>
+    }
+
+    <Modal Visible="_pasteVisible" VisibleChanged="v => _pasteVisible = v" Title="Вставити теми з КТП" Wide="true">
+        <p class="subtitle" style="margin-top:0">
+            Вставте список тем — по одній на рядок. Теми буде призначено урокам по порядку,
+            починаючи з першого уроку без теми.
+        </p>
+        <div class="field">
+            <textarea rows="10" @bind="_pasteText" placeholder="Тема 1&#10;Тема 2&#10;Тема 3…"></textarea>
+        </div>
+        <label class="checkbox-row">
+            <input type="checkbox" @bind="_pasteOverwrite" /> Перезаписувати вже заповнені теми
+        </label>
+        <div style="display:flex; justify-content:flex-end; gap:8px">
+            <button class="btn" @onclick="() => _pasteVisible = false">Скасувати</button>
+            <button class="btn primary" @onclick="ApplyPaste">Призначити теми</button>
+        </div>
+    </Modal>
+}
+
+@code {
+    [Parameter] public string JournalId { get; set; } = "";
+
+    private sealed class Row
+    {
+        public string LessonNumber = "";
+        public string Topic = "";
+        public string Homework = "";
+        public bool Dirty;
+    }
+
+    private JournalGrid? _grid;
+    private readonly Dictionary<string, Row> _rows = [];
+    private string? _notice;
+    private string _noticeClass = "ok";
+    private bool _pasteVisible;
+    private string _pasteText = "";
+    private bool _pasteOverwrite;
+
+    protected override async Task OnParametersSetAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _grid = await Store.GetGridAsync(JournalId);
+        _rows.Clear();
+        if (_grid is null) return;
+        foreach (var l in _grid.Lessons)
+        {
+            _grid.HomeworkBySchedule.TryGetValue(l.ScheduleId, out var hw);
+            _rows[l.ScheduleId] = new Row
+            {
+                LessonNumber = hw?.LessonNumber ?? "",
+                Topic = hw?.Topic ?? "",
+                Homework = hw?.Homework ?? "",
+            };
+        }
+    }
+
+    private Row GetRow(string scheduleId) =>
+        _rows.TryGetValue(scheduleId, out var r) ? r : _rows[scheduleId] = new Row();
+
+    private async Task SaveRow(string scheduleId)
+    {
+        var row = GetRow(scheduleId);
+        try
+        {
+            var isNus = (await Store.GetLessonFormAsync(JournalId))?.IsNus ?? false;
+            await Outbox.SetHomeworkLocallyAsync(JournalId, scheduleId,
+                row.Topic, row.LessonNumber, row.Homework, null, isNus);
+            row.Dirty = false;
+            Notify("Збережено локально. Не забудьте про «Синхронізацію».", "ok");
+        }
+        catch (Exception ex)
+        {
+            Notify($"Помилка: {ex.Message}", "error");
+        }
+    }
+
+    private async Task SaveAll()
+    {
+        foreach (var (scheduleId, row) in _rows.Where(kv => kv.Value.Dirty).ToList())
+            await SaveRow(scheduleId);
+    }
+
+    private async Task ApplyPaste()
+    {
+        if (_grid is null) return;
+        var topics = _pasteText
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (topics.Count == 0) return;
+
+        var i = 0;
+        foreach (var l in _grid.Lessons)
+        {
+            if (i >= topics.Count) break;
+            var row = GetRow(l.ScheduleId);
+            if (!_pasteOverwrite && !string.IsNullOrWhiteSpace(row.Topic)) continue;
+            row.Topic = topics[i++];
+            row.Dirty = true;
+        }
+
+        _pasteVisible = false;
+        Notify($"Призначено {i} тем(и). Перегляньте таблицю і натисніть «Зберегти всі зміни».", "ok");
+    }
+
+    private void Notify(string text, string cls)
+    {
+        _notice = text;
+        _noticeClass = cls;
+    }
+}

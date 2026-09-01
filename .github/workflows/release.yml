@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui-windows
+
+      - name: Resolve version from tag
+        id: version
+        shell: pwsh
+        # MSI ProductVersion вимагає числову x.y.z — теги мають бути vX.Y.Z
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Тег має бути формату vX.Y.Z, отримано: ${{ github.ref_name }}" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: dotnet test tests/NzuaTeacher.Tests/NzuaTeacher.Tests.csproj
+
+      # Самодостатній publish: користувачам не потрібні ані .NET, ані Windows App SDK
+      - name: Publish app (self-contained win-x64)
+        run: >
+          dotnet publish src/NzuaTeacher/NzuaTeacher.csproj
+          -c Release
+          -f net10.0-windows10.0.19041.0
+          -r win-x64
+          --self-contained true
+          -p:WindowsAppSDKSelfContained=true
+          -p:Version=${{ steps.version.outputs.version }}
+          -o publish
+
+      - name: Build installer (MSI + setup.exe bundle)
+        run: >
+          dotnet build installer/NzuaTeacher.Bundle/NzuaTeacher.Bundle.wixproj
+          -c Release
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:AppPublishDir=${{ github.workspace }}\publish\
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory artifacts | Out-Null
+          Copy-Item installer/NzuaTeacher.Bundle/bin/Release/NzuaTeacher-Setup.exe "artifacts/NzuaTeacher-Setup-${{ github.ref_name }}-x64.exe"
+          Copy-Item installer/NzuaTeacher.Installer/bin/Release/en-US/NzuaTeacher.msi "artifacts/NzuaTeacher-${{ github.ref_name }}-x64.msi" -ErrorAction SilentlyContinue
+          Get-ChildItem artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          # Не draft: при повторному пуші тегу оновлює наявний реліз і замінює однойменні асети.
+          draft: false

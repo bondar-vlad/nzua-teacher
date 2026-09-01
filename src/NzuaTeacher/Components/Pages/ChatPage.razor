@@ -1,0 +1,401 @@
+@page "/chat"
+@using Markdig
+@using Microsoft.Extensions.AI
+@using ModelContextProtocol.Client
+@inject ChatService Chat
+@inject McpChatHost McpHost
+@inject AiSettingsService AiSettings
+@inject TranscriptionService Transcriber
+@inject PrivacyDisplayService Privacy
+@inject JournalStore Store
+@inject Plugin.Maui.Audio.IAudioManager AudioManager
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="chat-layout">
+    <div class="page-header" style="margin-bottom:8px">
+        <div>
+            <h1>AI-помічник</h1>
+            <div class="subtitle">Працює через вбудований MCP-сервер nzua-mcp. Будь-який запис у журнал — лише з вашим підтвердженням.</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn small" @onclick="NewConversation">🧹 Нова розмова</button>
+    </div>
+
+    <div class="chat-toolbar">
+        <select @bind="_providerString">
+            @foreach (var (provider, name) in AiSettingsService.ProviderNames)
+            {
+                <option value="@provider">@name</option>
+            }
+        </select>
+        <span class="subtitle">Модель: @AiSettings.GetModel(SelectedProvider)</span>
+
+        <div class="spacer" style="flex:1"></div>
+
+        <select @bind="_selectedScenario">
+            <option value="">📋 Сценарії (MCP-промпти)…</option>
+            @foreach (var p in _prompts)
+            {
+                <option value="@p.Name">@(p.Title ?? p.Name)</option>
+            }
+        </select>
+        <select @bind="_scenarioJournalId">
+            <option value="">Журнал для сценарію…</option>
+            @foreach (var j in _journals)
+            {
+                <option value="@j.JournalId">@j.ClassName — @j.Subject</option>
+            }
+        </select>
+        <button class="btn small" @onclick="RunScenario" disabled="@(_busy || _selectedScenario == "")">▶ Запустити</button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="alert error">@_error <button class="btn-icon" @onclick="() => _error = null">✕</button></div>
+    }
+
+    <div class="chat-messages" id="chat-scroll">
+        @if (_messages.Count == 0)
+        {
+            <div class="empty-state">
+                <div class="icon">🤖</div>
+                <div>
+                    Запитайте будь-що про ваші журнали: «Хто не має оцінок за жовтень у 7-А?»,<br />
+                    «Заповни теми з файлу», «Постав Н відсутнім сьогодні» — або запустіть готовий сценарій.
+                </div>
+            </div>
+        }
+        @foreach (var m in _messages)
+        {
+            <div class="msg @m.Role">
+                @if (m.Role == "assistant")
+                {
+                    @((MarkupString)RenderMarkdown(m.Text))
+                    @if (m.ToolCalls.Count > 0)
+                    {
+                        <div class="tool-chips">
+                            @foreach (var tc in m.ToolCalls)
+                            {
+                                <span class="chip" title="@tc.Summary">🛠 @tc.ToolName</span>
+                            }
+                        </div>
+                    }
+                }
+                else
+                {
+                    @m.Text
+                }
+            </div>
+        }
+        @if (_busy)
+        {
+            <div class="msg assistant">
+                @if (_streamText.Length > 0)
+                {
+                    @((MarkupString)RenderMarkdown(_streamText.ToString()))
+                }
+                else
+                {
+                    <span class="spinner"></span> <i>думаю…</i>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_attachments.Count > 0)
+    {
+        <div class="attachment-list">
+            @foreach (var att in _attachments)
+            {
+                <span class="chip">📎 @att.FileName <button class="btn-icon" @onclick="() => _attachments.Remove(att)">✕</button></span>
+            }
+        </div>
+    }
+
+    <div class="chat-input-bar">
+        <label class="btn-icon" title="Додати вкладення (зображення, PDF, текст)">
+            📎
+            <InputFile OnChange="OnFilesSelected" multiple accept="image/*,.pdf,.txt,.csv,.md" style="display:none" />
+        </label>
+        <button class="btn-icon @(_recording ? "recording" : "")" title="Голосовий ввід"
+                @onclick="ToggleRecording" disabled="@_busy">
+            @(_recording ? "⏹" : "🎤")
+        </button>
+        <textarea placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати)"
+                  @bind="_input" @bind:event="oninput" @onkeydown="OnKeyDown" disabled="@_busy"></textarea>
+        <button class="btn primary" @onclick="Send" disabled="@(_busy || string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0)">
+            Надіслати
+        </button>
+    </div>
+</div>
+
+@* -------------------- підтвердження запису від AI -------------------- *@
+<Modal Visible="_confirmVisible" VisibleChanged="v => OnConfirmClosed(v)" Title="AI хоче записати в журнал" CloseOnBackdrop="false">
+    <div class="tool-confirm">
+        <div class="alert warn" style="margin-top:0">@_confirmRequest?.HumanSummary</div>
+        <details>
+            <summary class="subtitle" style="cursor:pointer">Технічні деталі виклику @_confirmRequest?.ToolName</summary>
+            <pre>@_confirmRequest?.ArgumentsJson</pre>
+        </details>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px">
+        <button class="btn danger" @onclick="() => ResolveConfirm(false)">Відхилити</button>
+        <button class="btn primary" @onclick="() => ResolveConfirm(true)">✓ Дозволити запис</button>
+    </div>
+</Modal>
+
+@code {
+    private sealed record UiMessage(string Role, string Text, List<ToolCallInfo> ToolCalls);
+
+    private readonly List<UiMessage> _messages = [];
+    private readonly List<ChatAttachment> _attachments = [];
+    private readonly System.Text.StringBuilder _streamText = new();
+    private string _input = "";
+    private bool _busy;
+    private bool _recording;
+    private string? _error;
+    private string _providerString = "";
+    private IList<McpClientPrompt> _prompts = [];
+    private List<CachedJournal> _journals = [];
+    private string _selectedScenario = "";
+    private string _scenarioJournalId = "";
+    private Plugin.Maui.Audio.IAudioRecorder? _recorder;
+
+    private ToolCallRequest? _confirmRequest;
+    private bool _confirmVisible;
+    private TaskCompletionSource<bool>? _confirmTcs;
+
+    private AiProvider SelectedProvider =>
+        Enum.TryParse<AiProvider>(_providerString, out var p) ? p : AiSettings.ActiveProvider;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _providerString = AiSettings.ActiveProvider.ToString();
+        Chat.ConfirmationHandler = OnToolConfirmationNeeded;
+        Chat.OnDelta = OnStreamDelta;
+        _journals = await Store.GetJournalsAsync();
+        await Privacy.RefreshAsync();
+        try
+        {
+            _prompts = await McpHost.ListPromptsAsync();
+        }
+        catch
+        {
+            // MCP-сервер підніметься при першому запиті — сценарії з’являться після оновлення сторінки.
+        }
+    }
+
+    private async Task Send()
+    {
+        var provider = SelectedProvider;
+        AiSettings.ActiveProvider = provider;
+        var config = await AiSettings.GetActiveConfigAsync();
+        if (config is null)
+        {
+            _error = $"Немає API-ключа для «{AiSettingsService.ProviderNames[provider]}». Додайте його в Налаштуваннях.";
+            return;
+        }
+
+        var text = _input.Trim();
+        var atts = _attachments.ToList();
+        _input = "";
+        _attachments.Clear();
+        _messages.Add(new UiMessage("user", text + (atts.Count > 0 ? $" 📎({atts.Count})" : ""), []));
+        _busy = true;
+        _streamText.Clear();
+        StateHasChanged();
+
+        try
+        {
+            var client = ChatClientFactory.Create(config);
+            var result = await Chat.SendAsync(client, text, atts);
+            _messages.Add(new UiMessage("assistant", Privacy.Humanize(result.Text), result.ToolCalls));
+        }
+        catch (Exception ex)
+        {
+            _error = $"Помилка: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            _streamText.Clear();
+            await ScrollToBottom();
+        }
+    }
+
+    private async Task RunScenario()
+    {
+        if (string.IsNullOrEmpty(_selectedScenario)) return;
+        var config = await AiSettings.GetActiveConfigAsync();
+        if (config is null)
+        {
+            _error = "Спершу додайте API-ключ у Налаштуваннях.";
+            return;
+        }
+
+        var args = new Dictionary<string, object?>();
+        if (!string.IsNullOrEmpty(_scenarioJournalId))
+            args["journalId"] = _scenarioJournalId;
+
+        _messages.Add(new UiMessage("user", $"▶ Сценарій: {_selectedScenario}" +
+            (string.IsNullOrEmpty(_scenarioJournalId) ? "" : $" (журнал {_scenarioJournalId})"), []));
+        _busy = true;
+        _streamText.Clear();
+        StateHasChanged();
+
+        try
+        {
+            var client = ChatClientFactory.Create(config);
+            var result = await Chat.RunPromptScenarioAsync(client, _selectedScenario, args);
+            _messages.Add(new UiMessage("assistant", Privacy.Humanize(result.Text), result.ToolCalls));
+        }
+        catch (Exception ex)
+        {
+            _error = $"Помилка сценарію: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            _streamText.Clear();
+            _selectedScenario = "";
+            await ScrollToBottom();
+        }
+    }
+
+    private void NewConversation()
+    {
+        Chat.ResetConversation();
+        _messages.Clear();
+        _error = null;
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(6))
+        {
+            if (file.Size > 20 * 1024 * 1024)
+            {
+                _error = $"«{file.Name}» завеликий (понад 20 МБ).";
+                continue;
+            }
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(20 * 1024 * 1024).CopyToAsync(ms);
+            var mediaType = string.IsNullOrEmpty(file.ContentType) ? GuessMime(file.Name) : file.ContentType;
+            _attachments.Add(new ChatAttachment(ms.ToArray(), mediaType, file.Name));
+        }
+    }
+
+    private static string GuessMime(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
+        ".pdf" => "application/pdf",
+        ".csv" => "text/csv",
+        ".md" => "text/markdown",
+        _ => "text/plain",
+    };
+
+    private async Task ToggleRecording()
+    {
+        try
+        {
+            if (!_recording)
+            {
+                var status = await Permissions.RequestAsync<Permissions.Microphone>();
+                if (status != PermissionStatus.Granted)
+                {
+                    _error = "Немає дозволу на мікрофон.";
+                    return;
+                }
+                _recorder = AudioManager.CreateRecorder();
+                await _recorder.StartAsync();
+                _recording = true;
+            }
+            else
+            {
+                _recording = false;
+                var source = await _recorder!.StopAsync();
+                await using var stream = source.GetAudioStream();
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+
+                _busy = true;
+                StateHasChanged();
+                var text = await Transcriber.TranscribeAsync(ms.ToArray(), "audio/wav");
+                _input = string.IsNullOrWhiteSpace(_input) ? text : $"{_input} {text}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Голосовий ввід: {ex.Message}";
+            _recording = false;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && e.CtrlKey && !_busy)
+            await Send();
+    }
+
+    // Виклик приходить із фонового потоку function-invocation — маршалимо в UI.
+    private async Task<bool> OnToolConfirmationNeeded(ToolCallRequest request)
+    {
+        _confirmTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(() =>
+        {
+            _confirmRequest = request;
+            _confirmVisible = true;
+            StateHasChanged();
+        });
+        return await _confirmTcs.Task;
+    }
+
+    private void ResolveConfirm(bool approved)
+    {
+        _confirmVisible = false;
+        _confirmTcs?.TrySetResult(approved);
+    }
+
+    private void OnConfirmClosed(bool visible)
+    {
+        _confirmVisible = visible;
+        if (!visible)
+            _confirmTcs?.TrySetResult(false);
+    }
+
+    private async void OnStreamDelta(string delta)
+    {
+        _streamText.Append(delta);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static readonly MarkdownPipeline Pipeline =
+        new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
+
+    private string RenderMarkdown(string text) => Markdown.ToHtml(text ?? "", Pipeline);
+
+    private async Task ScrollToBottom()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "var el=document.getElementById('chat-scroll'); if(el) el.scrollTop=el.scrollHeight;");
+        }
+        catch
+        {
+            // некритично
+        }
+    }
+
+    public void Dispose()
+    {
+        Chat.ConfirmationHandler = null;
+        Chat.OnDelta = null;
+    }
+}
