@@ -35,7 +35,9 @@ jobs:
       - name: Test
         run: dotnet test tests/NzuaTeacher.Tests/NzuaTeacher.Tests.csproj
 
-      # Самодостатній publish: користувачам не потрібні ані .NET, ані Windows App SDK
+      # Самодостатній publish: користувачам не потрібні ані .NET, ані Windows App SDK.
+      # PlaywrightPlatform обмежує .playwright/node лише Windows: без нього безRID-ва збірка
+      # nzua-mcp тягне node для linux/darwin (+465 МБ у publish).
       - name: Publish app (self-contained win-x64)
         run: >
           dotnet publish src/NzuaTeacher/NzuaTeacher.csproj
@@ -44,6 +46,7 @@ jobs:
           -r win-x64
           --self-contained true
           -p:WindowsAppSDKSelfContained=true
+          -p:PlaywrightPlatform=win-x64
           -p:Version=${{ steps.version.outputs.version }}
           -o publish
 

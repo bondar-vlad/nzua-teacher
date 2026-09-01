@@ -233,7 +233,7 @@ public sealed class ChatService(McpChatHost mcpHost, LocalChatTools localTools)
         return new ChatTurnResult(response.Text, toolCalls);
     }
 
-    private async Task<List<AITool>> BuildToolsAsync(CancellationToken ct)
+    internal async Task<List<AITool>> BuildToolsAsync(CancellationToken ct)
     {
         var tools = new List<AITool>();
 
@@ -251,7 +251,11 @@ public sealed class ChatService(McpChatHost mcpHost, LocalChatTools localTools)
             // MCP-сервер недоступний — лишаються локальні тули.
         }
 
-        tools.AddRange(localTools.GetTools());
+        // Схеми локальних тулів теж потребують санітизації: AIFunctionFactory генерує
+        // type: [x, "null"] і default: null для необов'язкових параметрів — Gemini відповідає 400.
+        foreach (var tool in localTools.GetTools())
+            tools.Add(tool is AIFunction fn ? new PreparedTool(fn, null) : tool);
+
         return tools;
     }
 }

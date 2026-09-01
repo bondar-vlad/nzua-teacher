@@ -27,8 +27,12 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
-    <!-- Весь каталог publish (self-contained: .NET, WindowsAppSDK, застосунок) -->
-    <Files Include="$(var.AppPublishDir)**" Directory="INSTALLFOLDER" />
+    <!-- Весь каталог publish (self-contained: .NET, WindowsAppSDK, застосунок).
+         NzuaTeacher.exe.WebView2 — це кеш профілю WebView2, який створює запущений застосунок;
+         у дистрибутив він потрапляти не повинен. -->
+    <Files Include="$(var.AppPublishDir)**" Directory="INSTALLFOLDER">
+      <Exclude Files="$(var.AppPublishDir)NzuaTeacher.exe.WebView2\**" />
+    </Files>
 
     <!-- Ярлики: per-user keypath у реєстрі HKCU -->
     <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">

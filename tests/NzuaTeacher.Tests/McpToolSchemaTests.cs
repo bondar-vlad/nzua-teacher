@@ -1,7 +1,10 @@
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using NzuaMcp.Nzua;
 using NzuaMcp.Nzua.Api;
 using NzuaTeacher.Core.AI;
+using NzuaTeacher.Core.Data;
+using NzuaTeacher.Core.Services;
 using Xunit;
 
 namespace NzuaTeacher.Tests;
@@ -54,6 +57,20 @@ public class McpToolSchemaTests
             var sanitized = new PreparedTool(tool, null).JsonSchema;
             AssertClean(sanitized, tool.Name);
         }
+    }
+
+    [Fact]
+    public async Task BuildTools_SanitizesLocalToolsToo()
+    {
+        using var db = new TestDbFactory();
+        await using var host = CreateHost();
+        var chat = new ChatService(host, new LocalChatTools(new JournalStore(db), new OutboxService(db)));
+
+        var tools = await chat.BuildToolsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(tools, t => t.Name == "local_pending_changes");
+        foreach (var tool in tools.OfType<AIFunction>())
+            AssertClean(tool.JsonSchema, tool.Name);
     }
 
     private static void AssertClean(JsonElement element, string toolName)
