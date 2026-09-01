@@ -59,7 +59,7 @@ jobs:
         run: |
           New-Item -ItemType Directory artifacts | Out-Null
           Copy-Item installer/NzuaTeacher.Bundle/bin/Release/NzuaTeacher-Setup.exe "artifacts/NzuaTeacher-Setup-${{ github.ref_name }}-x64.exe"
-          Copy-Item installer/NzuaTeacher.Installer/bin/Release/en-US/NzuaTeacher.msi "artifacts/NzuaTeacher-${{ github.ref_name }}-x64.msi" -ErrorAction SilentlyContinue
+          Copy-Item installer/NzuaTeacher.Installer/bin/Release/NzuaTeacher.msi "artifacts/NzuaTeacher-${{ github.ref_name }}-x64.msi"
           Get-ChildItem artifacts
 
       - name: Create GitHub Release
