@@ -18,16 +18,53 @@ public sealed class AiSettingsService(ISecretStore secrets, IAppPrefs prefs)
 
     public static readonly IReadOnlyDictionary<AiProvider, string> DefaultModels = new Dictionary<AiProvider, string>
     {
-        [AiProvider.Gemini] = "gemini-2.5-flash",
-        [AiProvider.OpenAi] = "gpt-4o-mini",
-        [AiProvider.Anthropic] = "claude-sonnet-4-5",
+        [AiProvider.Gemini] = "gemini-3.5-flash",
+        [AiProvider.OpenAi] = "gpt-5.6-luna",
+        [AiProvider.Anthropic] = "claude-sonnet-5",
+    };
+
+    /// <summary>Перевірені актуальні моделі (вересень 2026) для вибору в налаштуваннях.</summary>
+    public static readonly IReadOnlyDictionary<AiProvider, IReadOnlyList<(string Id, string Label)>> KnownModels =
+        new Dictionary<AiProvider, IReadOnlyList<(string, string)>>
+        {
+            [AiProvider.Gemini] =
+            [
+                ("gemini-3.5-flash", "Gemini 3.5 Flash — рекомендована, є безоплатний тариф"),
+                ("gemini-3.7-flash", "Gemini 3.7 Flash — найновіша Flash, є безоплатний тариф"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite — найшвидша й найдешевша"),
+                ("gemini-3.1-pro-preview", "Gemini 3.1 Pro — найрозумніша (лише платно)"),
+                ("gemini-2.5-flash", "Gemini 2.5 Flash — стабільна попередня"),
+            ],
+            [AiProvider.OpenAi] =
+            [
+                ("gpt-5.6-luna", "GPT-5.6 Luna — швидка й недорога (рекомендована)"),
+                ("gpt-5.6-terra", "GPT-5.6 Terra — збалансована"),
+                ("gpt-5.6-sol", "GPT-5.6 Sol — найпотужніша"),
+                ("gpt-5.4-mini", "GPT-5.4 mini — бюджетна"),
+                ("gpt-5-mini", "GPT-5 mini — старіша бюджетна"),
+            ],
+            [AiProvider.Anthropic] =
+            [
+                ("claude-sonnet-5", "Claude Sonnet 5 — швидкість + якість (рекомендована)"),
+                ("claude-haiku-4-5", "Claude Haiku 4.5 — найшвидша й найдешевша"),
+                ("claude-opus-5", "Claude Opus 5 — для складних задач"),
+                ("claude-fable-5", "Claude Fable 5 — найпотужніша"),
+            ],
+        };
+
+    /// <summary>Сторінки, де копіювати API-ключі.</summary>
+    public static readonly IReadOnlyDictionary<AiProvider, string> KeyPageUrls = new Dictionary<AiProvider, string>
+    {
+        [AiProvider.Gemini] = "https://aistudio.google.com/apikey",
+        [AiProvider.OpenAi] = "https://platform.openai.com/api-keys",
+        [AiProvider.Anthropic] = "https://console.anthropic.com/settings/keys",
     };
 
     public static readonly IReadOnlyDictionary<AiProvider, string> ProviderNames = new Dictionary<AiProvider, string>
     {
-        [AiProvider.Gemini] = "Google Gemini (є безоплатний тариф)",
-        [AiProvider.OpenAi] = "OpenAI",
-        [AiProvider.Anthropic] = "Anthropic Claude",
+        [AiProvider.Gemini] = "Google Gemini — є безоплатний тариф",
+        [AiProvider.OpenAi] = "OpenAI — платно",
+        [AiProvider.Anthropic] = "Anthropic Claude — платно",
     };
 
     private static string KeyName(AiProvider p) => $"apikey:{p}";

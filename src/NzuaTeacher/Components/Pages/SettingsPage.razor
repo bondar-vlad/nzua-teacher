@@ -18,13 +18,13 @@
 <div class="settings-grid">
 
     <div class="card">
-        <h2>🔐 Сесія NZ.UA</h2>
+        <h2>🔐 Вхід у NZ.UA</h2>
         @if (Session.HasSession)
         {
-            <p>Сесія активна.
+            <p>Ви увійшли в NZ.UA.
                 @if (Session.ExpiresAt is { } exp)
                 {
-                    <span class="subtitle">Дійсна до @exp.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</span>
+                    <span class="subtitle">Сесія дійсна до @exp.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</span>
                 }
             </p>
             <button class="btn danger" @onclick="Logout">Вийти</button>
@@ -32,8 +32,7 @@
         else
         {
             <p class="subtitle">
-                Вхід відбувається у справжньому вікні браузера (пароль не зберігається в застосунку).
-                Сесія спільна з nzua-mcp для Claude Desktop.
+                Вхід відбувається у справжньому вікні браузера — пароль у застосунку не зберігається.
             </p>
             <button class="btn primary" @onclick="Login" disabled="@_loggingIn">
                 @if (_loggingIn)
@@ -49,32 +48,65 @@
     {
         <div class="card provider-card @(AiSettings.ActiveProvider == provider ? "active-provider" : "")">
             <h2>@ProviderIcon(provider) @AiSettingsService.ProviderNames[provider]</h2>
-            @if (provider == AiProvider.Gemini)
-            {
-                <p class="subtitle">
-                    Безоплатний ключ: <b>aistudio.google.com</b> → Get API key.
-                    Увага: на безоплатному тарифі Google може використовувати дані для покращення моделей —
-                    тому за замовчуванням у чат ідуть псевдоніми учнів.
-                </p>
-            }
-            <div class="field">
-                <label>API-ключ @(_hasKey[provider] ? "(збережено ✓)" : "")</label>
+
+            <div class="key-help">
+                @if (provider == AiProvider.Gemini)
+                {
+                    <text>1. Натисніть «Отримати ключ» — відкриється Google AI Studio.<br />
+                    2. Увійдіть Google-акаунтом → кнопка <b>Create API key</b>.<br />
+                    3. Скопіюйте ключ і вставте в поле нижче. Картка не потрібна — Flash-моделі мають безоплатний тариф
+                    (Google може використовувати такі запити для покращення моделей, тому імена учнів ми замінюємо псевдонімами).</text>
+                }
+                else if (provider == AiProvider.OpenAi)
+                {
+                    <text>1. Натисніть «Отримати ключ» — відкриється platform.openai.com.<br />
+                    2. Увійдіть → <b>Create new secret key</b> → скопіюйте ключ (показується один раз).<br />
+                    3. Безоплатного тарифу немає: потрібно поповнити баланс (Billing) хоча б на кілька доларів.</text>
+                }
+                else
+                {
+                    <text>1. Натисніть «Отримати ключ» — відкриється console.anthropic.com.<br />
+                    2. Увійдіть → <b>Create Key</b> → скопіюйте ключ.<br />
+                    3. Безоплатного тарифу немає: потрібно поповнити баланс у розділі Billing.</text>
+                }
+            </div>
+            <button class="btn small" @onclick="() => OpenKeyPage(provider)">🔗 Отримати ключ (@KeyHost(provider))</button>
+
+            <div class="field" style="margin-top:12px">
+                <label>API-ключ @(_hasKey[provider] ? "— збережено ✓" : "")</label>
                 <div class="key-row">
-                    <input type="password" @bind="_keyInputs[provider]" placeholder="@(_hasKey[provider] ? "•••••••• (введіть новий, щоб замінити)" : "вставте ключ…")" />
+                    <input type="password" @bind="_keyInputs[provider]"
+                           placeholder="@(_hasKey[provider] ? "•••••••• (вставте новий, щоб замінити)" : "вставте скопійований ключ…")" />
                     <button class="btn" @onclick="() => SaveKey(provider)">Зберегти</button>
                 </div>
             </div>
+
             <div class="field">
                 <label>Модель</label>
-                <div class="key-row">
-                    <input type="text" @bind="_modelInputs[provider]" />
-                    <button class="btn" @onclick="() => SaveModel(provider)">OK</button>
-                </div>
+                <select value="@ModelSelectValue(provider)" @onchange="@(e => OnModelSelected(provider, e.Value?.ToString() ?? string.Empty))">
+                    @foreach (var (id, label) in AiSettingsService.KnownModels[provider])
+                    {
+                        <option value="@id">@label</option>
+                    }
+                    @if (!AiSettingsService.KnownModels[provider].Any(m => m.Id == AiSettings.GetModel(provider)))
+                    {
+                        <option value="@AiSettings.GetModel(provider)">@AiSettings.GetModel(provider) (власна)</option>
+                    }
+                    <option value="__custom">Інша модель (ввести вручну)…</option>
+                </select>
+                @if (_customModelFor == provider)
+                {
+                    <div class="key-row" style="margin-top:6px">
+                        <input type="text" @bind="_customModelInput" placeholder="напр., gemini-3.6-flash" />
+                        <button class="btn" @onclick="() => SaveCustomModel(provider)">OK</button>
+                    </div>
+                }
             </div>
+
             <div style="display:flex; gap:8px; flex-wrap:wrap">
                 <button class="btn small @(AiSettings.ActiveProvider == provider ? "primary" : "")"
                         @onclick="() => SetActive(provider)">
-                    @(AiSettings.ActiveProvider == provider ? "✓ Активний" : "Зробити активним")
+                    @(AiSettings.ActiveProvider == provider ? "✓ Використовується" : "Використовувати цей")
                 </button>
                 <button class="btn small" @onclick="() => TestKey(provider)" disabled="@(_testing || !_hasKey[provider])">
                     @if (_testing)
@@ -93,11 +125,12 @@
 
     <div class="card">
         <h2>🎤 Голосовий ввід</h2>
+        <p class="subtitle">Перетворення сказаного на текст у чаті. Потрібен ключ Gemini (безоплатно) або OpenAI.</p>
         <div class="field">
-            <label>Провайдер розшифровки</label>
+            <label>Сервіс розпізнавання</label>
             <select @bind="_transcriptionProvider" @bind:after="SaveTranscription">
                 <option value="@AiProvider.Gemini">Gemini (безоплатний тариф)</option>
-                <option value="@AiProvider.OpenAi">OpenAI Whisper</option>
+                <option value="@AiProvider.OpenAi">OpenAI Whisper (платно)</option>
             </select>
         </div>
     </div>
@@ -115,29 +148,31 @@
     </div>
 
     <div class="card">
-        <h2>💾 Локальний кеш</h2>
+        <h2>💾 Дані на цьому компʼютері</h2>
         <p class="subtitle">
-            База: @NzuaTeacher.Core.AppPaths.DbPath<br />
-            Розмір: @_dbSize
+            Журнали, оцінки й теми зберігаються локально, щоб працювати без інтернету.<br />
+            Розташування: @NzuaTeacher.Core.AppPaths.DataDir<br />
+            Обсяг збережених даних: <b>@_dbSize</b>
         </p>
-        <button class="btn danger" @onclick="() => _clearCacheVisible = true">Очистити кеш журналів</button>
+        <button class="btn danger" @onclick="() => _clearCacheVisible = true">Видалити збережені журнали</button>
     </div>
 
 </div>
 
-<Modal Visible="_clearCacheVisible" VisibleChanged="v => _clearCacheVisible = v" Title="Очистити кеш?">
-    <p>Буде видалено локальні копії журналів, оцінок і тем. <b>Незасинхронізовані зміни теж буде втрачено.</b></p>
-    <p>Матеріали генератора і налаштування залишаться.</p>
+<Modal Visible="_clearCacheVisible" VisibleChanged="v => _clearCacheVisible = v" Title="Видалити збережені журнали?">
+    <p>Буде видалено локальні копії журналів, оцінок і тем. <b>Ненадіслані зміни теж буде втрачено.</b></p>
+    <p>Створені матеріали та налаштування залишаться. Дані можна завантажити з NZ.UA знову.</p>
     <div style="display:flex; justify-content:flex-end; gap:8px">
         <button class="btn" @onclick="() => _clearCacheVisible = false">Скасувати</button>
-        <button class="btn danger" @onclick="ClearCache">Очистити</button>
+        <button class="btn danger" @onclick="ClearCache">Видалити</button>
     </div>
 </Modal>
 
 @code {
     private readonly Dictionary<AiProvider, string> _keyInputs = [];
-    private readonly Dictionary<AiProvider, string> _modelInputs = [];
     private readonly Dictionary<AiProvider, bool> _hasKey = [];
+    private AiProvider? _customModelFor;
+    private string _customModelInput = "";
     private string _transcriptionProvider = "";
     private bool _showRealNames;
     private bool _loggingIn;
@@ -152,7 +187,6 @@
         foreach (var p in Enum.GetValues<AiProvider>())
         {
             _keyInputs[p] = "";
-            _modelInputs[p] = AiSettings.GetModel(p);
             _hasKey[p] = !string.IsNullOrEmpty(await AiSettings.GetApiKeyAsync(p));
         }
         _transcriptionProvider = AiSettings.TranscriptionProvider.ToString();
@@ -167,7 +201,7 @@
         try
         {
             await Session.LoginAsync();
-            Notify("Вхід виконано. Сесію збережено.", "ok");
+            Notify("Вхід виконано.", "ok");
         }
         catch (Exception ex)
         {
@@ -182,34 +216,66 @@
     private void Logout()
     {
         Session.Logout();
-        Notify("Сесію очищено.", "ok");
+        Notify("Ви вийшли з NZ.UA.", "ok");
     }
+
+    private async Task OpenKeyPage(AiProvider provider)
+    {
+        try
+        {
+            await Launcher.Default.OpenAsync(AiSettingsService.KeyPageUrls[provider]);
+        }
+        catch (Exception ex)
+        {
+            Notify($"Не вдалося відкрити браузер: {ex.Message}. Адреса: {AiSettingsService.KeyPageUrls[provider]}", "warn");
+        }
+    }
+
+    private static string KeyHost(AiProvider provider) =>
+        new Uri(AiSettingsService.KeyPageUrls[provider]).Host;
 
     private async Task SaveKey(AiProvider provider)
     {
         var key = _keyInputs[provider];
         if (string.IsNullOrWhiteSpace(key))
         {
-            Notify("Вставте ключ у поле.", "warn");
+            Notify("Спершу вставте ключ у поле.", "warn");
             return;
         }
         await AiSettings.SetApiKeyAsync(provider, key);
         _keyInputs[provider] = "";
         _hasKey[provider] = true;
-        Notify($"Ключ {AiSettingsService.ProviderNames[provider]} збережено в захищеному сховищі Windows.", "ok");
+        Notify("Ключ збережено в захищеному сховищі Windows. Натисніть «Перевірити ключ», щоб упевнитися.", "ok");
     }
 
-    private void SaveModel(AiProvider provider)
+    private string ModelSelectValue(AiProvider provider) =>
+        _customModelFor == provider ? "__custom" : AiSettings.GetModel(provider);
+
+    private void OnModelSelected(AiProvider provider, string value)
     {
-        AiSettings.SetModel(provider, _modelInputs[provider]);
-        _modelInputs[provider] = AiSettings.GetModel(provider);
-        Notify("Модель збережено.", "ok");
+        if (value == "__custom")
+        {
+            _customModelFor = provider;
+            _customModelInput = AiSettings.GetModel(provider);
+            return;
+        }
+        _customModelFor = null;
+        AiSettings.SetModel(provider, value);
+        Notify($"Модель: {value}.", "ok");
+    }
+
+    private void SaveCustomModel(AiProvider provider)
+    {
+        if (string.IsNullOrWhiteSpace(_customModelInput)) return;
+        AiSettings.SetModel(provider, _customModelInput);
+        _customModelFor = null;
+        Notify($"Модель: {AiSettings.GetModel(provider)}.", "ok");
     }
 
     private void SetActive(AiProvider provider)
     {
         AiSettings.ActiveProvider = provider;
-        Notify($"Активний провайдер: {AiSettingsService.ProviderNames[provider]}.", "ok");
+        Notify($"Тепер використовується {AiSettingsService.ProviderNames[provider]}.", "ok");
     }
 
     private void RemoveKey(AiProvider provider)
@@ -272,15 +338,25 @@
         await db.SaveChangesAsync();
         _clearCacheVisible = false;
         _dbSize = GetDbSize();
-        Notify("Кеш очищено.", "ok");
+        Notify("Збережені журнали видалено.", "ok");
     }
 
+    /// <summary>Розмір бази включно з WAL/SHM; до 1 МБ показуємо в КБ.</summary>
     private static string GetDbSize()
     {
         try
         {
-            var info = new FileInfo(NzuaTeacher.Core.AppPaths.DbPath);
-            return info.Exists ? $"{info.Length / 1024.0 / 1024.0:0.0} МБ" : "—";
+            long bytes = 0;
+            var path = NzuaTeacher.Core.AppPaths.DbPath;
+            foreach (var f in new[] { path, path + "-wal", path + "-shm" })
+            {
+                var info = new FileInfo(f);
+                if (info.Exists) bytes += info.Length;
+            }
+            if (bytes == 0) return "порожньо";
+            return bytes < 1024 * 1024
+                ? $"{Math.Max(1, bytes / 1024)} КБ"
+                : $"{bytes / 1024.0 / 1024.0:0.0} МБ";
         }
         catch
         {

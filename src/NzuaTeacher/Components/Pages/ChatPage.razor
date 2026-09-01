@@ -114,18 +114,18 @@
     }
 
     <div class="chat-input-bar">
-        <label class="btn-icon" title="Додати вкладення (зображення, PDF, текст)">
+        <label class="input-action" title="Додати вкладення (зображення, PDF, текст)">
             📎
             <InputFile OnChange="OnFilesSelected" multiple accept="image/*,.pdf,.txt,.csv,.md" style="display:none" />
         </label>
-        <button class="btn-icon @(_recording ? "recording" : "")" title="Голосовий ввід"
+        <button class="input-action @(_recording ? "recording" : "")" title="@(_recording ? "Зупинити запис" : "Голосовий ввід")"
                 @onclick="ToggleRecording" disabled="@_busy">
             @(_recording ? "⏹" : "🎤")
         </button>
-        <textarea placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати)"
+        <textarea rows="1" placeholder="Напишіть повідомлення… (Ctrl+Enter — надіслати)"
                   @bind="_input" @bind:event="oninput" @onkeydown="OnKeyDown" disabled="@_busy"></textarea>
-        <button class="btn primary" @onclick="Send" disabled="@(_busy || string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0)">
-            Надіслати
+        <button class="btn primary send-btn" @onclick="Send" disabled="@(_busy || string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0)">
+            Надіслати ➤
         </button>
     </div>
 </div>
@@ -303,11 +303,16 @@
         {
             if (!_recording)
             {
-                var status = await Permissions.RequestAsync<Permissions.Microphone>();
-                if (status != PermissionStatus.Granted)
+                // На незапакованому Windows Permissions читає AppxManifest.xml і падає —
+                // доступ до мікрофона там керується налаштуваннями конфіденційності Windows.
+                if (DeviceInfo.Platform != DevicePlatform.WinUI)
                 {
-                    _error = "Немає дозволу на мікрофон.";
-                    return;
+                    var status = await Permissions.RequestAsync<Permissions.Microphone>();
+                    if (status != PermissionStatus.Granted)
+                    {
+                        _error = "Немає дозволу на мікрофон.";
+                        return;
+                    }
                 }
                 _recorder = AudioManager.CreateRecorder();
                 await _recorder.StartAsync();
@@ -326,6 +331,11 @@
                 var text = await Transcriber.TranscribeAsync(ms.ToArray(), "audio/wav");
                 _input = string.IsNullOrWhiteSpace(_input) ? text : $"{_input} {text}";
             }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _error = "Windows блокує мікрофон для застосунків. Увімкніть: Параметри → Конфіденційність і безпека → Мікрофон.";
+            _recording = false;
         }
         catch (Exception ex)
         {

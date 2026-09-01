@@ -7,37 +7,48 @@
 <div class="page-header">
     <div>
         <h1>Мої журнали</h1>
-        <div class="subtitle">Дані з локального кешу — працюють і без інтернету</div>
+        <div class="subtitle">Журнали зберігаються на цьому компʼютері — можна працювати навіть без інтернету</div>
     </div>
     <div class="spacer"></div>
     @if (_semesters.Count > 0)
     {
-        <select @bind="_selectedSemester">
-            @foreach (var s in _semesters)
-            {
-                <option value="@s.SemesterId">@s.Label</option>
-            }
-        </select>
+        <label class="inline-label">
+            Семестр:
+            <select @bind="_selectedSemester" @bind:after="OnSemesterChanged" disabled="@_busy">
+                @if (_selectedSemester is null)
+                {
+                    <option value="">— оберіть —</option>
+                }
+                @foreach (var s in _semesters)
+                {
+                    <option value="@s.SemesterId">@s.Label</option>
+                }
+            </select>
+        </label>
     }
-    <button class="btn primary" @onclick="RefreshList" disabled="@_busy">
+    <button class="btn primary" @onclick="() => RefreshList(null)" disabled="@_busy">
         @if (_busy)
         {
             <span class="spinner"></span>
         }
-        Оновити список із NZ.UA
+        Оновити з NZ.UA
     </button>
 </div>
 
+@if (_status is not null)
+{
+    <div class="alert info"><span class="spinner"></span> @_status</div>
+}
 @if (_error is not null)
 {
-    <div class="alert error">@_error</div>
+    <div class="alert error">@_error <button class="btn-icon" @onclick="() => _error = null">✕</button></div>
 }
 
 @if (!Session.HasSession && _journals.Count == 0)
 {
     <div class="alert info">
         Ви ще не входили в NZ.UA. Відкрийте <a href="settings">Налаштування</a> і натисніть «Увійти в NZ.UA»,
-        або натисніть «Оновити список» — вікно входу відкриється автоматично.
+        або натисніть «Оновити з NZ.UA» — вікно входу відкриється автоматично.
     </div>
 }
 
@@ -45,29 +56,32 @@
 {
     <div class="empty-state">
         <div class="icon">📓</div>
-        <div>Кеш порожній. Натисніть «Оновити список із NZ.UA», щоб завантажити журнали.</div>
+        <div>Журналів поки немає. Натисніть «Оновити з NZ.UA», щоб завантажити ваші журнали.</div>
     </div>
 }
 else
 {
-    <div class="cards-grid">
-        @foreach (var j in _journals)
-        {
-            <div class="card journal-card" @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">
-                <div class="title">@j.ClassName — @j.Subject</div>
-                <div class="meta">
-                    <span>№ @j.JournalId</span>
-                    <span>@Staleness(j)</span>
+    @foreach (var group in _journals.GroupBy(j => j.ClassName).OrderBy(g => g.Key, ClassNameComparer.Instance))
+    {
+        <h2 class="group-title">🏫 @group.Key <span class="subtitle">@Plural(group.Count())</span></h2>
+        <div class="cards-grid">
+            @foreach (var j in group.OrderBy(x => x.Subject))
+            {
+                <div class="card journal-card" @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">
+                    <div class="title">@j.Subject</div>
+                    <div class="meta">
+                        <span>@Staleness(j)</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn small" @onclick:stopPropagation="true"
+                                @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">🔢 Оцінки</button>
+                        <button class="btn small" @onclick:stopPropagation="true"
+                                @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}/topics"))">📋 Теми та ДЗ</button>
+                    </div>
                 </div>
-                <div class="actions">
-                    <button class="btn small" @onclick:stopPropagation="true"
-                            @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}"))">Оцінки</button>
-                    <button class="btn small" @onclick:stopPropagation="true"
-                            @onclick="@(() => Nav.NavigateTo($"journal/{j.JournalId}/topics"))">Теми та ДЗ</button>
-                </div>
-            </div>
-        }
-    </div>
+            }
+        </div>
+    }
 }
 
 @code {
@@ -76,25 +90,38 @@ else
     private string? _selectedSemester;
     private bool _busy;
     private string? _error;
+    private string? _status;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await LoadFromStore();
+
+    private async Task LoadFromStore()
     {
         _journals = await Store.GetJournalsAsync();
-        (_semesters, _selectedSemester) = await Store.GetSemestersAsync();
+        var (semesters, current) = await Store.GetSemestersAsync();
+        _semesters = semesters;
+        // Якщо збережений семестр не знайдено серед опцій — падаємо на поточний/перший.
+        _selectedSemester =
+            semesters.FirstOrDefault(s => s.SemesterId == current)?.SemesterId
+            ?? semesters.FirstOrDefault(s => s.IsCurrent)?.SemesterId
+            ?? semesters.FirstOrDefault()?.SemesterId;
     }
 
-    private async Task RefreshList()
+    private async Task OnSemesterChanged()
+    {
+        if (string.IsNullOrEmpty(_selectedSemester)) return;
+        await RefreshList(_selectedSemester);
+    }
+
+    private async Task RefreshList(string? semesterId)
     {
         _busy = true;
         _error = null;
+        _status = "Завантажуємо список журналів із NZ.UA…";
         StateHasChanged();
         try
         {
-            var (_, current) = await Store.GetSemestersAsync();
-            await Sync.RefreshJournalListAsync(
-                _selectedSemester is not null && _selectedSemester != current ? _selectedSemester : null);
-            _journals = await Store.GetJournalsAsync();
-            (_semesters, _selectedSemester) = await Store.GetSemestersAsync();
+            await Sync.RefreshJournalListAsync(semesterId);
+            await LoadFromStore();
         }
         catch (Exception ex)
         {
@@ -103,16 +130,45 @@ else
         finally
         {
             _busy = false;
+            _status = null;
         }
     }
 
+    private static string Plural(int n) => n switch
+    {
+        1 => "1 предмет",
+        2 or 3 or 4 => $"{n} предмети",
+        _ => $"{n} предметів",
+    };
+
     private static string Staleness(CachedJournal j)
     {
-        if (j.LastPulledAt is null) return "ще не завантажувався";
+        if (j.LastPulledAt is null) return "дані ще не завантажені";
         var age = DateTime.UtcNow - j.LastPulledAt.Value;
         return age.TotalMinutes < 1 ? "оновлено щойно"
             : age.TotalHours < 1 ? $"оновлено {(int)age.TotalMinutes} хв тому"
             : age.TotalDays < 1 ? $"оновлено {(int)age.TotalHours} год тому"
             : $"оновлено {(int)age.TotalDays} дн тому";
+    }
+
+    /// <summary>Природне сортування класів: 5-А, 5-Б, 11-А (а не 11 перед 5).</summary>
+    private sealed class ClassNameComparer : IComparer<string>
+    {
+        public static readonly ClassNameComparer Instance = new();
+
+        public int Compare(string? x, string? y)
+        {
+            var nx = LeadingNumber(x);
+            var ny = LeadingNumber(y);
+            if (nx != ny) return nx.CompareTo(ny);
+            return string.Compare(x, y, StringComparison.CurrentCulture);
+        }
+
+        private static int LeadingNumber(string? s)
+        {
+            if (string.IsNullOrEmpty(s)) return int.MaxValue;
+            var digits = new string(s.TakeWhile(char.IsDigit).ToArray());
+            return int.TryParse(digits, out var n) ? n : int.MaxValue;
+        }
     }
 }

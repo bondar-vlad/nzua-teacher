@@ -123,6 +123,14 @@ textarea { resize: vertical; }
 
 .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 
+.group-title {
+    display: flex; align-items: baseline; gap: 10px;
+    margin: 22px 0 10px; font-size: 1.2rem;
+}
+.group-title:first-of-type { margin-top: 4px; }
+
+.inline-label { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--muted); }
+
 .journal-card { cursor: pointer; transition: transform .1s ease; }
 .journal-card:hover { transform: translateY(-2px); border-color: var(--primary); }
 .journal-card .title { font-weight: 600; font-size: 1.05rem; margin-bottom: 4px; }
@@ -258,12 +266,29 @@ table.topics-table { width: 100%; border-collapse: collapse; font-size: .9rem; b
 .msg .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 .chat-input-bar {
-    display: flex; gap: 8px; align-items: flex-end;
+    display: flex; gap: 8px; align-items: center;
     background: #fff; border: 1px solid var(--border); border-radius: 14px;
-    padding: 10px; box-shadow: var(--shadow);
+    padding: 8px 10px; box-shadow: var(--shadow);
 }
-.chat-input-bar textarea { flex: 1; border: none; padding: 6px 8px; max-height: 140px; min-height: 40px; }
+.chat-input-bar textarea {
+    flex: 1; border: none; resize: none; outline: none;
+    padding: 10px 6px; margin: 0; line-height: 1.4;
+    max-height: 140px; min-height: 42px; box-sizing: border-box;
+    font-size: .95rem;
+}
 .chat-input-bar textarea:focus { border: none; }
+
+/* Кнопки-дії в полі вводу: однакові квадрати, вирівняні по центру */
+.input-action {
+    flex-shrink: 0; width: 42px; height: 42px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1.15rem; line-height: 1; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: #f8fafc; color: var(--text); padding: 0; margin: 0;
+}
+.input-action:hover { background: var(--primary-soft); border-color: var(--primary); }
+.input-action:disabled { opacity: .55; cursor: default; }
+.send-btn { flex-shrink: 0; height: 42px; }
 
 .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 
@@ -301,3 +326,9 @@ table.topics-table { width: 100%; border-collapse: collapse; font-size: .9rem; b
 .provider-card.active-provider { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 .key-row { display: flex; gap: 8px; }
 .key-row input { flex: 1; }
+
+.key-help {
+    font-size: .84rem; color: var(--muted); line-height: 1.55;
+    background: #f8fafc; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px;
+}
